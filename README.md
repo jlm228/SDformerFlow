@@ -4,7 +4,7 @@
 This code allows for the reproduction of our paper: 
 SDformerFlow: Spiking Neural Network Transformer for Event-based Optical Flow, ICPR2024 [[paper]](https://link.springer.com/chapter/10.1007/978-3-031-78354-8_30)
 and our new improved version of the model:
-SDformerFlow: Spatiotemporal swin spikeformer for event-based optical flow estimation. [[arxiv]](https://arxiv.org/abs/2409.04082)
+Spatiotemporal swin spikeformer for event-based optical flow estimation, accepted by IEEE Transactions on Emerging Topics in Computational Intelligence (TETCI)[[arxiv]](https://arxiv.org/abs/2409.04082)
 
 The following are results tested on our validation dataset on DSEC dataset. Flow estimation are masked where valid ground truth data is available.
 
