@@ -1,0 +1,51 @@
+experiment: Default
+
+# ANN evaluation for STTFlowNet-en4-b2-p4-w10 (Table 3 best row).
+# Target: EPE 0.81, 2.50% outliers, AEE 4.33.
+#
+# Deliberately NO crop and NO remap. That model is trained at full 480x640
+# (train_DSEC_supervised_STT_voxel_en4.yml sets crop: Null), so training and test resolution
+# already agree and the swin position-bias tables are the right size as-is. Adding remap here
+# would interpolate biases that need no interpolation.
+#
+# Contrast with the SNN, which trains at 288x384 and therefore needs window interpolation to be
+# evaluated at full resolution -- see valid_DSEC_supervised_full.yml.
+#
+# Table 3 reports a single number per row with no cropped/full split, and lists this row's
+# training resolution as 480x640, so full-resolution test is the consistent reading. If you also
+# want a cropped figure for direct comparison against the SNN's "C" column, set
+# crop: [288,384] -- but note there is no published ANN number to check that against.
+
+loader:
+    batch_size: 1
+    resolution: [480, 640] # H x W origin resolution
+    scale_factor: 1
+    crop: Null
+    gpu: 0
+
+
+model:
+    norm_input: "minmax"
+
+
+loss:
+    lambda_mod: 1
+    lambda_ang: 0
+
+metrics:
+    name: [AEE,AAE]  # FWL, RSAT, AEE
+    mask_events: False
+
+
+vis:
+    verbose: False
+    enabled: True
+    px: 400
+    store: False
+    monitor_fr: False
+    monitor_v: False
+
+
+test:
+    scale_factor: 1
+    sample: 40

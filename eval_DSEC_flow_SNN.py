@@ -4,6 +4,9 @@ import mlflow
 from configs.parser import YAMLParser
 from loss.flow_supervised import *
 from models.STSwinNet_SNN.Spiking_STSwinNet import SpikingformerFlowNet,MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4
+# The model is built via eval(config["model"]["name"]), so the ANN classes must be in scope
+# here too -- this script is the DSEC evaluator for both the ANN and the SNN despite its name.
+from models.STSwinNet.STSwinNet import STTFlowNet, STTFlowNet_4en
 from tqdm import tqdm
 from utils.mlflow import log_config, log_results
 from utils.utils import load_model,  create_model_dir,save_csv, save_model, count_parameters,print_parameters
@@ -98,25 +101,31 @@ def valid_test(args, config_parser):
 
     model = load_model(args.runid, model, device, remap = remap, test = True) # delete the relative positioning bias and index
 
-    functional.reset_net(model)
-    functional.set_step_mode(model, config['data']['step_mode'])
+    # The ANN configs set `spiking_neuron: Null` and carry no `data.step_mode`, so all of the
+    # spikingjelly setup below is SNN-only. Running it for STTFlowNet raised TypeError on
+    # None["neuron_type"].
+    spiking_cfg = config["model"].get("spiking_neuron")
 
-    if config["model"]["spiking_neuron"]["neuron_type"] == "if":
-        neurontype = getattr(neuron, "IFNode")
-    elif config["model"]["spiking_neuron"]["neuron_type"] == "lif":
-        neurontype = getattr(neuron, "LIFNode")
-    elif config["model"]["spiking_neuron"]["neuron_type"] == "plif":
-        neurontype = getattr(neuron, "ParametricLIFNode")
-    elif config["model"]["spiking_neuron"]["neuron_type"] == "glif":
-        neurontype = GatedLIFNode
-    elif config["model"]["spiking_neuron"]["neuron_type"] == "psn":
-        neurontype = PSN
-    elif config["model"]["spiking_neuron"]["neuron_type"] == "SLTTlif":
-        neurontype = SLTTLIFNode
-    else:
-        raise "neurontype not implemented!"
-    if device.type != 'cpu':
-        functional.set_backend(model, "cupy", neurontype)
+    if spiking_cfg is not None:
+        functional.reset_net(model)
+        functional.set_step_mode(model, config['data']['step_mode'])
+
+        neuron_types = {
+            "if": getattr(neuron, "IFNode"),
+            "lif": getattr(neuron, "LIFNode"),
+            "plif": getattr(neuron, "ParametricLIFNode"),
+            "glif": GatedLIFNode,
+            "psn": PSN,
+            "SLTTlif": SLTTLIFNode,
+        }
+        neuron_type = spiking_cfg["neuron_type"]
+        if neuron_type not in neuron_types:
+            # was `raise "..."`, which is itself a TypeError rather than the intended error
+            raise NotImplementedError("neurontype not implemented: {}".format(neuron_type))
+        neurontype = neuron_types[neuron_type]
+
+        if device.type != 'cpu':
+            functional.set_backend(model, "cupy", neurontype)
     print(model)
     print_parameters(model)
 

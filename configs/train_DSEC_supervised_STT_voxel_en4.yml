@@ -1,0 +1,118 @@
+experiment: Default
+
+# STTFlowNet-en4-b2-p4-w10, voxel, trained at 480x640 -- the best-performing ANN row of the
+# paper's Table 3 (EPE 0.81, 2.50% outliers, AEE 4.33, 57.51 M params).
+#
+# This is the ANN half of the equivalent pair for the DSEC validation tables; the SNN half is
+# train_DSEC_supervised_SDformerFlow_en4.yml, which already matches the best Table 4 row
+# (SDformerFlow-SPE-QK-s10-c2, MS/4-encoder/PSN, 54.92 M). Matching en4 on both sides makes the
+# comparison capacity-matched (57.51 M vs 54.92 M).
+#
+# Changed from train_DSEC_supervised_STT_voxel.yml (which is en3-b2-p4-w9 at 288x384, and does
+# not correspond to any Table 3 row):
+#   model.name        STTFlowNet -> STTFlowNet_4en          (en3 -> en4)
+#   swin_depths       [2,2,6]    -> [2,2,6,2]               (must equal num_encoders)
+#   swin_num_heads    [3,6,12]   -> [3,6,12,24]
+#   swin_out_indices  [0,1,2]    -> [0,1,2,3]
+#   window_size       [2,9,9]    -> [2,10,10]               (w10)
+#   loader.crop       [288,384]  -> Null                    (train at full 480x640)
+#
+# Unchanged and already correct for this row: encoding voxel, num_chunks 2 (b2),
+# swin_patch_size [10,4,4] -> spatial patch 4 (p4).
+#
+# Verify the row on the first run: the script prints total parameters at startup. Expect
+# ~57.5 M. If it prints ~20.3 M you are still on the en3 architecture.
+#
+# Memory note: full-resolution 480x640 at batch_size 8 is ~2.8x the pixels of the 288x384 crop.
+# The authors trained this on three 2080 Ti (~33 GB total), so it should fit one A100-80. If it
+# OOMs, halve batch_size and scale lr rather than re-cropping -- the training resolution is part
+# of what this row reports.
+
+data:
+    path: data/Datasets/DSEC/saved_flow_data
+    preprocessed: True
+    num_frames: 10 #num of frames per ts/
+    num_chunks: 2
+    step_mode: 's'
+    spike_th: Null
+
+
+model:
+    name: STTFlowNet_4en
+    encoding: voxel # voxel/cnt/spike
+    norm_input: "minmax"
+    num_bins: 20 # num frame * chunks
+    base_num_channels: 96
+    kernel_size: 3
+    activations:  [relu, Null]
+    final_activation: Null
+    mask_output: True
+    norm:  Null
+    use_upsample_conv : False
+    spiking_neuron: Null
+
+
+swin_transformer:
+    use_arc: ["swinv2","PatchEmbedLocal"]  #PatchEmbedLocal,PatchEmbedLocalGlobal,PatchEmbed3D
+    state_combination: "none"
+    base_num_channels: 96
+    swin_depths: [2,2,6,2]  #swin layers (one per encoder)
+    swin_num_heads: [ 3,6,12,24]
+    swin_out_indices: [ 0,1,2,3]
+    swin_patch_size: [ 10,4,4 ] #spatio-temporal patch -> spatial patch 4 (p4)
+    window_size: [ 2,10,10 ]    #swin spatial window 10 (w10)
+    pretrained_window_size: [ 0,0,0 ]
+    mlp_ratio: 4
+
+
+loss:
+    training: 'supervised'
+    lambda_mod: 1
+    lambda_ang: 0
+    flow_regul_weight: 0.001
+    gamma: Null
+    clip_grad: 100.0
+    overwrite_intermediate: False
+
+optimizer:
+    name: AdamW
+    lr: 0.001
+    wd: 0.01
+    scheduler: "multistep"
+    milestones: [ 10, 20, 30, 40, 50, 70, 90, 120]
+    use_amp: False
+    num_acc: 1
+
+
+loader:
+    n_epochs: 100
+    batch_size: 8
+    batch_multiplyer: 1
+    resolution: [480, 640] # H x W origin resolution
+    augment: ["Horizontal", "Vertical", "Polarity"]
+    augment_prob: [0.5, 0.5, 0.]
+    max_drop_rate: 0.6
+    polarity: True
+    crop: Null      # train at full 480x640, as this Table 3 row reports
+    gpu: 0
+    n_workers: 4
+    parallel: False
+
+vis:
+    verbose: False
+    enabled: False
+    px: 400
+    store_grads: False
+    store: False
+    mask_events: False
+    store_spike_rates: False
+
+
+metrics:
+    name: [AEE]
+    flow_scaling: 1
+    mask_events: False
+
+test:
+    sample: 40
+    n_valid: 5

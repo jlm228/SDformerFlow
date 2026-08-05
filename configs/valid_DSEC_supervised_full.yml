@@ -1,0 +1,60 @@
+experiment: Default
+
+# SNN evaluation at FULL 480x640 resolution -- the "F" column of the paper's Table 4.
+# Target for SDformerFlow-SPE-QK-s10-c2: EPE 1.61, 8.91% outliers, AEE 7.23.
+#
+# Use valid_DSEC_supervised.yml (crop [288,384]) for the "C" column instead: EPE 0.93, 3.17%, 6.37.
+# Evaluating both is worth it -- two published numbers from one trained model, and if only one
+# matches, the discrepancy localises to the resolution handling rather than to training.
+#
+# The SNN is TRAINED at 288x384 with window_size [2,9,9]. Testing at 480x640 therefore needs the
+# swin relative-position-bias tables interpolated up to the larger window: 480/288 = 1.667, and
+# 9 * 1.667 = 15, hence window_size [2,15,15] with pretrained_window_size [2,9,9]. remap: "v1"
+# is what triggers that interpolation (load_pretrained_interpolate) inside load_model. These are
+# the authors' own values -- they ship commented out in valid_DSEC_supervised.yml.
+#
+# Without the remap you still get numbers, but from position biases sized for the wrong window.
+#
+# NOTE: these settings override the values logged with the training run. The evaluator loads the
+# run's params first (merge_configs) and this YAML takes precedence, which is exactly how the
+# resolution switch is meant to work.
+
+loader:
+    batch_size: 1
+    resolution: [480, 640] # H x W origin resolution
+    scale_factor: 1
+    crop: Null          # full resolution -- no centre crop
+    remap: "v1"         # interpolate swin position biases for the larger window
+    gpu: 0
+
+
+model:
+    norm_input: "minmax"
+
+
+swin_transformer:
+    window_size: [ 2,15,15 ]
+    pretrained_window_size: [ 2,9,9 ]
+
+
+loss:
+    lambda_mod: 1
+    lambda_ang: 0
+
+metrics:
+    name: [AEE,AAE]  # FWL, RSAT, AEE
+    mask_events: False
+
+
+vis:
+    verbose: False
+    enabled: True
+    px: 400
+    store: False
+    monitor_fr: False
+    monitor_v: False
+
+
+test:
+    scale_factor: 1
+    sample: 40
