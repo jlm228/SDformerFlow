@@ -45,17 +45,17 @@ the Python 3.11.3 module from `env.sh`, and:
   `model/data/model.pth`.
 - Keep `spikingjelly==0.0.0.0.14` and `timm==0.6.13` exactly. Record `pip freeze`.
 
-Then the split CSVs. Copy from OF_EV_SNN (not in this repo) into
-`data/Datasets/DSEC/saved_flow_data/sequence_lists/`: `train_split_doubleseq.csv` (6000 rows) and
-`valid_split_doubleseq.csv` (2152). The ANN (`num_chunks: 2`) reads those directly; the SNN
-(`num_chunks: 1`) needs `*_split_seq.csv`, which is unpublished — derive it:
+Then install the split CSVs. They are vendored in [`splits/`](../splits/) (see that README for
+provenance — upstream does not ship them despite depending on them):
 
 ```bash
-cd DSEC_dataloader && python build_seq_split.py
+bash hpc/setup_splits.sh      # runs from anywhere; prints 6000/2152 for all four lists
 ```
 
-That takes column 2 of each doubleseq CSV (the target frame, whose ground truth is the label),
-preserving the authors' exact partition rather than inventing one.
+The ANN (`num_chunks: 2`) reads the `*_doubleseq.csv` files directly. The SNN (`num_chunks: 1`)
+reads `*_split_seq.csv`, which is published nowhere; `build_seq_split.py` derives it by taking
+column 2 of each doubleseq CSV (the target frame, whose ground truth is the label), preserving
+the authors' exact partition rather than inventing one.
 
 ## 0. Download DSEC (login node, ~15–60 min)
 

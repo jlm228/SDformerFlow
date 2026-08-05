@@ -5,8 +5,9 @@ DSECDatasetLite picks its split file from `data.num_chunks`:
     num_chunks == 2  ->  <split>_split_doubleseq.csv   (two columns: frame1, frame2)
     num_chunks == 1  ->  <split>_split_seq.csv         (one column)
 
-Only the `doubleseq` variants are published (they ship with OF_EV_SNN). The SNN config
-uses `num_chunks: 1`, so the single-chunk lists have to be derived.
+Only the `doubleseq` variants exist -- they are vendored in this repo under `splits/` (see
+splits/README.md for why they are not upstream). The SNN config uses `num_chunks: 1`, so the
+single-chunk lists have to be derived.
 
 Column 2 of the doubleseq CSV is the *target* frame -- the one whose ground truth is loaded
 (see DSEC_dataset_lite.__getitem__, which reads the label from target_file_2 when
@@ -28,8 +29,9 @@ def build_seq_split(sequence_lists_dir: str, split: str, overwrite: bool = False
 
     if not os.path.isfile(src):
         raise FileNotFoundError(
-            '{} not found. Copy train/valid_split_doubleseq.csv from OF_EV_SNN '
-            '(data/dataset/saved_flow_data/sequence_lists/) first.'.format(src))
+            '{} not found. Install the vendored splits first:\n'
+            '    mkdir -p <saved_flow_data>/sequence_lists\n'
+            '    cp splits/*.csv <saved_flow_data>/sequence_lists/'.format(src))
 
     if os.path.isfile(dst) and not overwrite:
         raise FileExistsError('{} already exists; pass --overwrite to replace it.'.format(dst))

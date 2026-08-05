@@ -49,12 +49,12 @@ python -c "import torch; assert torch.cuda.is_available(), 'no GPU visible to to
 # Preflight. Each of these otherwise surfaces either as a confusing stack trace hours in, or --
 # worse -- as a run that quietly trains on less data than intended.
 #
-# The ANN configs use num_chunks: 2, so DSECDatasetLite reads *_split_doubleseq.csv. Those CSVs
-# are not in this repo; they come from OF_EV_SNN (6000 train / 2152 valid rows).
+# The ANN configs use num_chunks: 2, so DSECDatasetLite reads *_split_doubleseq.csv
+# (6000 train / 2152 valid rows), which are vendored in splits/.
 for split in train_split_doubleseq.csv valid_split_doubleseq.csv; do
     [ -f "${DATA_DIR}/sequence_lists/${split}" ] || {
-        echo "ERROR: ${DATA_DIR}/sequence_lists/${split} not found."
-        echo "Copy them from OF_EV_SNN/data/dataset/saved_flow_data/sequence_lists/."
+        echo "ERROR: ${DATA_DIR}/sequence_lists/${split} not found. Install them with:"
+        echo "  mkdir -p ${DATA_DIR}/sequence_lists && cp splits/*.csv ${DATA_DIR}/sequence_lists/"
         exit 1
     }
 done
