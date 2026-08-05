@@ -26,12 +26,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=24:0:0
+#SBATCH --time=2-0:0:0
 #SBATCH --output=hpc/logs/%x_%j.out
-# 24 h is the safe default: it is what already works for GPU jobs on this project, and the
-# published cap is ambiguous (bbgpu is nominally 10 days, but GPU nodes are documented at 2 days
-# per job). Chaining makes the exact cap irrelevant. Override with `sbatch --time=...`, which
-# takes precedence over this directive -- hpc/submit_train.sh does that via WALLTIME.
+# 2 days is the hard cap for this QoS (`sacctmgr show qos bbgpu` -> MaxWall 2-00:00:00), so this
+# requests the maximum. At ~20-35 h the ANN should finish inside a single segment; the chain in
+# hpc/submit_train.sh exists as insurance, not necessity. Override with `sbatch --time=...`,
+# which takes precedence over this directive -- submit_train.sh does that via WALLTIME.
 
 set -euo pipefail
 

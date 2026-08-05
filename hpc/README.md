@@ -84,7 +84,7 @@ on top of the raw downloads. Only the 18 sequences with public ground truth are 
 
 ```bash
 SMOKE=1 bash hpc/submit_train.sh ann    # 1 segment, 1 epoch, end-to-end check
-bash hpc/submit_train.sh ann            # 2 chained segments
+bash hpc/submit_train.sh ann            # 1 segment (fits the 2-day cap)
 ```
 
 Trains at **full 480×640** — that is what the Table 3 row reports, ~2.8× the pixels of the
@@ -106,7 +106,7 @@ are already correctly sized.
 
 ```bash
 SMOKE=1 bash hpc/submit_train.sh snn    # 1 segment, 1 epoch
-bash hpc/submit_train.sh snn            # 3 chained segments
+bash hpc/submit_train.sh snn            # 2 chained segments
 ```
 
 Expect `Total parameters` ~**54.9 M**. `train_snn.slurm` also JIT-compiles a spikingjelly CuPy
@@ -155,9 +155,11 @@ the extras exit immediately.
 Starting a fresh chain while a `*_runid.txt` exists is refused — a stale id would silently resume
 the wrong run. Either pass `PREV_RUNID=...` to continue, or delete the file.
 
-Scripts request `--time=24:0:0`, the safe assumption for GPU jobs here (the docs are ambiguous:
-`bbgpu` is nominally 10 days, but GPU nodes are documented at 2 days per job). Override with
-`WALLTIME=...` if your queue allows longer.
+Scripts request `--time=2-0:0:0`, this QoS's hard cap (`sacctmgr show qos bbgpu` → `MaxWall
+2-00:00:00`). At that ceiling the ANN (~20–35 h) fits a single segment and the SNN (~1.5–2.5
+days) needs at most two, which is what `submit_train.sh` defaults to. Shorter requests can
+backfill sooner on a busy queue at the cost of more segments — `WALLTIME=12:0:0 bash
+hpc/submit_train.sh snn`.
 
 ## Monitoring
 

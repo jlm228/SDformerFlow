@@ -2,8 +2,8 @@
 # Submit a training run as a chain of Slurm segments, each resuming the previous one's rolling
 # per-epoch checkpoint via --dependency=afterok.
 #
-#   bash hpc/submit_train.sh ann          # ANN, 2 segments  (~20-35 h total)
-#   bash hpc/submit_train.sh snn          # SNN, 3 segments  (~1.5-2.5 days total)
+#   bash hpc/submit_train.sh ann          # ANN, 1 segment   (~20-35 h, fits one 2-day job)
+#   bash hpc/submit_train.sh snn          # SNN, 2 segments  (~1.5-2.5 days total)
 #   SEGMENTS=4 bash hpc/submit_train.sh snn
 #   SMOKE=1   bash hpc/submit_train.sh ann      # 1 segment, 1 epoch, end-to-end check
 #   WALLTIME=12:0:0 bash hpc/submit_train.sh ann
@@ -11,11 +11,10 @@
 # To continue an existing run rather than start fresh:
 #   PREV_RUNID=<mlflow_run_id> bash hpc/submit_train.sh snn
 #
-# Chaining exists because GPU walltime here is capped (24 h is the safe assumption; the docs
-# also mention 2 days for GPU nodes). Segments make the exact number irrelevant: if a segment is
-# killed by the walltime, the next one resumes from the last per-epoch checkpoint, losing at most
-# one epoch. Over-requesting segments is harmless -- once training reaches n_epochs the extra
-# segments exit almost immediately.
+# Chaining exists because GPU walltime here is capped at 2 days (`sacctmgr show qos bbgpu` ->
+# MaxWall 2-00:00:00). If a segment is killed by the walltime the next resumes from the last
+# per-epoch checkpoint, losing at most one epoch. Over-requesting segments is harmless -- once
+# training reaches n_epochs the extra segments exit almost immediately.
 
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"     # repo root
@@ -23,13 +22,15 @@ mkdir -p hpc/logs
 
 MODEL="${1:-}"
 case "${MODEL}" in
-    ann) SCRIPT=hpc/train_ann.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/ann_runid.txt}"; DEF_SEG=2 ;;
-    snn) SCRIPT=hpc/train_snn.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/snn_runid.txt}"; DEF_SEG=3 ;;
+    ann) SCRIPT=hpc/train_ann.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/ann_runid.txt}"; DEF_SEG=1 ;;
+    snn) SCRIPT=hpc/train_snn.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/snn_runid.txt}"; DEF_SEG=2 ;;
     *)   echo "usage: bash hpc/submit_train.sh {ann|snn}"; exit 1 ;;
 esac
 
 SEGMENTS="${SEGMENTS:-${DEF_SEG}}"
-WALLTIME="${WALLTIME:-24:0:0}"
+# 2 days is this QoS's hard cap (sacctmgr show qos bbgpu -> MaxWall 2-00:00:00). Shorter
+# requests can backfill sooner if the queue is busy, at the cost of more segments.
+WALLTIME="${WALLTIME:-2-0:0:0}"
 
 if [ "${SMOKE:-0}" != "0" ]; then
     SEGMENTS=1
