@@ -9,7 +9,7 @@ from tqdm import tqdm
 import math
 from models.STSwinNet_SNN.Spiking_STSwinNet import SpikingformerFlowNet, MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4
 from utils.gradients import get_grads
-from utils.utils import load_model, save_csv, save_model, save_state_dict, resume_model, count_parameters,print_parameters,save_flops_csv
+from utils.utils import load_model, save_csv, save_model, save_state_dict, save_checkpoint, resume_model, count_parameters,print_parameters,save_flops_csv
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.DSEC_dataset_lite import DSECDatasetLite
 from DSEC_dataloader.data_augmentation import downsample_data,Compose,CenterCrop,RandomCrop,RandomRotationFlip,Random_event_drop,Random_horizontal_flip,Random_vertical_flip
@@ -41,8 +41,18 @@ def train(args, config_parser):
         mlflow.log_params(config)
         mlflow.log_param("prev_runid", args.prev_runid)
         print("MLflow dir:", mlflow.active_run().info.artifact_uri[:-9])
+        # The run id is the only handle on the checkpoint (load_model resolves by run id, not
+        # path), and chained Slurm segments need the previous segment's id to resume.
+        if getattr(args, "runid_file", ""):
+            with open(args.runid_file, "w") as f:
+                f.write(mlflow.active_run().info.run_id)
+            print("Run id written to", args.runid_file)
 
     config = config_parser.combine_entries(config)
+
+    if getattr(args, "smoke_epochs", 0):
+        print("[smoke] capping n_epochs to {}".format(args.smoke_epochs))
+        config["loader"]["n_epochs"] = args.smoke_epochs
 
     #use mix-precision training
     if config['optimizer']['use_amp']:
@@ -87,7 +97,10 @@ def train(args, config_parser):
         elif config["swin_transformer"]["use_arc"][0] == "swinv1":
             remap = "v1"
 
-    model = load_model(args.prev_runid, model, device, remap)
+    # Resuming must pick up the rolling per-epoch weights, not the best-loss ones, so that
+    # weights and optimizer state come from the same epoch.
+    model = load_model(args.prev_runid, model, device, remap,
+                       artifact_path="model_latest" if args.resume else "model")
 
     #reset SNN, step model, backend
     # tune the surrogate function
@@ -144,8 +157,11 @@ def train(args, config_parser):
     else:
         num_acc_steps = 1.
 
+    best_loss = 1.0e6
+
     if args.resume:
-        optimizer, scheduler, scaler, epoch_initial = resume_model(args.prev_runid, optimizer, scheduler, scaler, epoch_initial, device)
+        optimizer, scheduler, scaler, epoch_initial, best_loss = resume_model(
+            args.prev_runid, optimizer, scheduler, scaler, epoch_initial, device, best_loss)
 
     # Define the loss function
     loss_function = flow_loss_supervised(config,device)
@@ -216,9 +232,8 @@ def train(args, config_parser):
 
 
 
-    # simulation variables
+    # simulation variables (best_loss is initialised above, before the resume)
 
-    best_loss = 1.0e6
     grads_w = []
 
     #record gradients
@@ -369,9 +384,12 @@ def train(args, config_parser):
         # save model
         with torch.no_grad():
             if epoch_loss < best_loss:
-                save_model(model)
-                save_state_dict(optimizer, scheduler, scaler, epoch)
                 best_loss = epoch_loss
+                save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=False)
+            # Rolling checkpoint every epoch regardless of whether the loss improved. BlueBEAR
+            # caps GPU jobs at 2 days and this run needs 3-4 chained segments, so saving only on
+            # improvement risks losing a whole plateau to the walltime.
+            save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=True)
 
 
         #####validate after each 5 epoch############
@@ -528,6 +546,17 @@ if __name__ == "__main__":
         "--resume",
         default="",
         help="resume the training",
+    )
+    parser.add_argument(
+        "--smoke_epochs",
+        default=0,
+        type=int,
+        help="cap n_epochs, for a quick end-to-end check of the pipeline (0 = use the config)",
+    )
+    parser.add_argument(
+        "--runid_file",
+        default="",
+        help="write the new MLflow run id here, for chained Slurm segments to resume from",
     )
 
     args = parser.parse_args()

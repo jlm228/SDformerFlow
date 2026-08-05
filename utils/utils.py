@@ -7,13 +7,22 @@ from collections.abc import MutableMapping
 
 
 #for test or finetune
-def load_model(prev_runid, model, device, remap = None, test=False):
-    try:
-        run = mlflow.get_run(prev_runid)
-    except:
+def load_model(prev_runid, model, device, remap = None, test=False, artifact_path="model"):
+    # An empty run id is the legitimate "train from scratch" path. A non-empty one that
+    # does not resolve is always a mistake, and must not fall through silently: doing so
+    # evaluates a randomly initialised network and still prints plausible metrics.
+    if not prev_runid:
         return model
 
-    model_dir = run.info.artifact_uri + "/model/data/model.pth"
+    try:
+        run = mlflow.get_run(prev_runid)
+    except Exception as e:
+        raise RuntimeError(
+            "MLflow run '{}' could not be loaded from tracking uri '{}'.".format(
+                prev_runid, mlflow.get_tracking_uri())
+        ) from e
+
+    model_dir = run.info.artifact_uri + "/{}/data/model.pth".format(artifact_path)
     if model_dir[:7] == "file://":
         model_dir = model_dir[7:]
 
@@ -34,18 +43,22 @@ def load_model(prev_runid, model, device, remap = None, test=False):
             del pretrained_model
             torch.cuda.empty_cache()
         model.load_state_dict(pretrained_dict, strict=False)
-        print("Model restored from " + prev_runid + "\n")
+        print("Model restored from " + prev_runid + " (" + artifact_path + ")\n")
     else:
-        print("No model found at" + prev_runid + "\n")
+        raise FileNotFoundError(
+            "No model artifact at {}. Run '{}' exists but has no '{}' logged.".format(
+                model_dir, prev_runid, artifact_path)
+        )
 
     return model
 
-def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device):
+def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device,
+                 best_loss=1.0e6, artifact_path="training_state_dict_latest"):
 
     run = mlflow.get_run(prev_runid)
 
 
-    state_dir = run.info.artifact_uri + "/training_state_dict/state_dict.pth"
+    state_dir = run.info.artifact_uri + "/{}/state_dict.pth".format(artifact_path)
     if state_dir[:7] == "file://":
         state_dir = state_dir[7:]
 
@@ -61,10 +74,17 @@ def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device
         if "scaler" in state_dict.keys() and scaler is not None:
             scaler.load_state_dict(state_dict["scaler"])
         epoch_initial = state_dict["epoch"] + 1
+        # Carry the best-loss watermark across restarts. Without this it resets to 1e6
+        # and the first epoch after every resume overwrites the best model with a worse one.
+        if state_dict.get("best_loss") is not None:
+            best_loss = state_dict["best_loss"]
 
-        print("Model resumed from " + prev_runid + "\n")
+        print("Resumed from {} at epoch {} (best_loss={:.6g})\n".format(
+            prev_runid, epoch_initial, best_loss))
     else:
-        print("No model found at" + prev_runid + "\n")
+        raise FileNotFoundError(
+            "No resume state at {}. Cannot resume run '{}'.".format(state_dir, prev_runid)
+        )
 
     #resume previous metrics
     # for key, value in run.data.metrics.items():
@@ -80,7 +100,7 @@ def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device
     #         valid_loss = f.read()
     #         mlflow.log_metric("valid_loss", float(valid_loss))
 
-    return optimizer, scheduler, scaler, epoch_initial
+    return optimizer, scheduler, scaler, epoch_initial, best_loss
 
 def create_model_dir(path_results, runid):
     path_results += runid + "/"
@@ -90,18 +110,33 @@ def create_model_dir(path_results, runid):
     return path_results
 
 
-def save_model(model):
-    mlflow.pytorch.log_model(model, "model")
+def save_model(model, artifact_path="model"):
+    mlflow.pytorch.log_model(model, artifact_path)
 
 
-def save_state_dict(optimizer,scheduler,scaler, epoch):
+def save_state_dict(optimizer,scheduler,scaler, epoch, best_loss=None,
+                    artifact_path="training_state_dict"):
     state_dict = {
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict() if scheduler else None,
         "epoch": epoch,
         "scaler": scaler.state_dict() if scaler else None,
+        "best_loss": best_loss,
     }
-    mlflow.pytorch.log_state_dict(state_dict, artifact_path="training_state_dict")
+    mlflow.pytorch.log_state_dict(state_dict, artifact_path=artifact_path)
+
+
+def save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=True):
+    """Write one checkpoint pair (weights + training state).
+
+    `latest=True` writes the per-epoch rolling checkpoint that --resume reads; `latest=False`
+    writes the best-loss checkpoint that evaluation reads. They are kept in separate artifact
+    paths so a resume near the end of training cannot clobber the best model.
+    """
+    suffix = "_latest" if latest else ""
+    save_model(model, artifact_path="model" + suffix)
+    save_state_dict(optimizer, scheduler, scaler, epoch, best_loss=best_loss,
+                    artifact_path="training_state_dict" + suffix)
 
 
 def save_csv(data, fname):

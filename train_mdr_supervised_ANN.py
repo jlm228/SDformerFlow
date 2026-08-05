@@ -174,15 +174,18 @@ def train(args, config_parser):
     #     num_acc_steps = config["optimizer"]["num_acc"]
     # else:
     num_acc_steps = 1.
+
+    # simulation variables. best_loss is initialised before the resume so that a restored
+    # watermark survives; initialising it afterwards would silently discard it.
+    best_loss = 1.0e6
+
     if args.resume:
-        optimizer, scheduler, scaler, epoch_initial = resume_model(args.prev_runid, optimizer, scheduler, scaler, epoch_initial, device)
+        optimizer, scheduler, scaler, epoch_initial, best_loss = resume_model(
+            args.prev_runid, optimizer, scheduler, scaler, epoch_initial, device, best_loss)
 
     # Define the loss function
     loss_function = flow_loss_supervised(config,device)
 
-    # simulation variables
-
-    best_loss = 1.0e6
     grads_w = []
 
     # training loop
