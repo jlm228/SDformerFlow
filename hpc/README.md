@@ -39,11 +39,18 @@ python -c "import imageio; imageio.plugins.freeimage.download()"   # compute nod
 Python 3.7.3 + CUDA 11.8, but it pins `cupy-cuda12x`, which needs Python ≥3.8 and CUDA 12.x. Use
 the Python 3.11.3 module from `env.sh`, and:
 
-- **Pin `torch<2.6`.** From 2.6 `torch.load` defaults to `weights_only=True`, which breaks
-  `utils.load_model` — it loads a pickled whole `nn.Module`, not a state_dict.
-- **Pin `mlflow<2.0`**, or verify the artifact layout; `utils.py` hardcodes the 1.x path
-  `model/data/model.pth`.
+- **torch ≥ 2.6 is fine.** Its `torch.load` `weights_only=True` default would break checkpoint
+  loading (these are pickled whole `nn.Module`s, not state_dicts), so `utils.py` passes
+  `weights_only=False` explicitly at both load sites. No pin needed.
+- **`mlflow<3` is the safe choice.** 3.x changed `mlflow.pytorch.log_model` to create a separate
+  "logged model" instead of a run artifact, so checkpoints may not land under
+  `run.info.artifact_uri` at all. `load_model`/`resume_model` now search the artifact subtree
+  rather than assuming the 1.x path, but if the smoke run cannot reload its own checkpoint,
+  `pip install 'mlflow<3'`.
 - Keep `spikingjelly==0.0.0.0.14` and `timm==0.6.13` exactly. Record `pip freeze`.
+
+Run `bash hpc/check_env.sh` after installing — it verifies all of the above plus the imageio
+FreeImage plugin and the split row counts.
 
 Then install the split CSVs. They are vendored in [`splits/`](../splits/) (see that README for
 provenance — upstream does not ship them despite depending on them):

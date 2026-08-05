@@ -42,23 +42,22 @@ import sys
 ok = True
 try:
     import torch
-    major, minor = (int(x) for x in torch.__version__.split(".")[:2])
-    if (major, minor) >= (2, 6):
-        print(f"  torch {torch.__version__}: TOO NEW -- torch.load defaults to weights_only=True")
-        print("    from 2.6, which breaks utils.load_model (it unpickles a whole nn.Module).")
-        print("    Pin torch<2.6, or pass weights_only=False at both torch.load sites.")
-        ok = False
-    else:
-        print(f"  torch {torch.__version__}: ok (<2.6)")
+    print(f"  torch {torch.__version__}: ok -- utils.py passes weights_only=False explicitly,")
+    print("    so the torch>=2.6 default does not break checkpoint loading.")
 except Exception as e:
     print(f"  torch: could not check ({e})"); ok = False
 try:
     import mlflow
-    if int(mlflow.__version__.split(".")[0]) >= 2:
-        print(f"  mlflow {mlflow.__version__}: check artifact layout -- utils.py hardcodes the")
-        print("    1.x path model/data/model.pth. Pin mlflow<2.0 if load_model cannot find it.")
+    major = int(mlflow.__version__.split(".")[0])
+    if major >= 3:
+        print(f"  mlflow {mlflow.__version__}: RISK -- 3.x changed mlflow.pytorch.log_model to")
+        print("    create a separate 'logged model' rather than a run artifact, so checkpoints")
+        print("    may not appear under run.info.artifact_uri at all. load_model now searches")
+        print("    the artifact tree, but if the SMOKE run cannot reload its own checkpoint,")
+        print("    pin mlflow<3 (e.g. pip install 'mlflow<3').")
+        print("    Verify with: SMOKE=1 bash hpc/submit_train.sh ann, then evaluate that run id.")
     else:
-        print(f"  mlflow {mlflow.__version__}: ok (<2.0)")
+        print(f"  mlflow {mlflow.__version__}: ok (<3)")
 except Exception as e:
     print(f"  mlflow: could not check ({e})"); ok = False
 sys.exit(0 if ok else 1)
