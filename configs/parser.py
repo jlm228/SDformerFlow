@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import torch
 import yaml
@@ -96,10 +98,25 @@ class YAMLParser:
         np.random.seed(np.random.get_state()[1][0] + worker_id)
 
     def init_seeds(self):
-        torch.manual_seed(self._config["loader"]["seed"])
-        #if torch.cuda.is_available():
-        #    torch.cuda.manual_seed(self._config["loader"]["seed"])
-        #    torch.cuda.manual_seed_all(self._config["loader"]["seed"])
+        # Upstream seeded only torch's CPU generator, leaving CUDA, numpy and random unseeded
+        # and cudnn nondeterministic -- so runs were not reproducible even at a fixed seed.
+        seed = self._config["loader"]["seed"]
+
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+
+        # Determinism costs throughput, so it is opt-in via loader.deterministic. Note that
+        # exact reproduction is still not guaranteed: some spikingjelly/CuPy kernels and the
+        # atomics in the voxel scatter have no deterministic implementation.
+        if self._config["loader"].get("deterministic", False):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        else:
+            torch.backends.cudnn.benchmark = True
 
     def merge_configs(self, run):
         """
