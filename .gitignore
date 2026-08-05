@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Datasets and derived tensors -- staged on /rds, never committed (DSEC alone is ~38 GB raw
+# and ~120 GB preprocessed).
+data/
+
+# MLflow tracking store: checkpoint artifacts here are hundreds of MB each.
+mlruns/
+results/
+results_inference/
+output/
+
+# Slurm job logs and the chained-run id handoff files.
+hpc/logs/
+
+.DS_Store
