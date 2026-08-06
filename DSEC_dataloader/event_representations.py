@@ -144,8 +144,13 @@ class EventSlicer:
         idx_start_offset, idx_end_offset = self.get_time_indices_offsets(time_array_conservative, t_start_us, t_end_us)
         t_start_us_idx = t_start_ms_idx + idx_start_offset
         t_end_us_idx = t_start_ms_idx + idx_end_offset
-        # Again add t_offset to get gps time
-        events['t'] = time_array_conservative[idx_start_offset:idx_end_offset] + self.t_offset
+        # Again add t_offset to get gps time.
+        # DSEC stores 't' as uint32 microseconds relative to t_offset, and t_offset is a large
+        # int64 (~5e10 us). Under NumPy 2's NEP 50 promotion rules a Python int that does not
+        # fit the array dtype raises OverflowError instead of silently upcasting, so widen the
+        # slice to int64 first. NumPy 1.x tolerated the original expression.
+        events['t'] = time_array_conservative[idx_start_offset:idx_end_offset].astype(np.int64) \
+            + self.t_offset
         for dset_str in ['p', 'x', 'y']:
             events[dset_str] = np.asarray(self.events[dset_str][t_start_us_idx:t_end_us_idx])
             assert events[dset_str].size == events['t'].size

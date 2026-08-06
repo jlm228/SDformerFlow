@@ -100,7 +100,47 @@ fetch_sequence() {
 export -f fetch_sequence
 export BASE_URL DATA_ROOT ZIP_DIR KEEP_ZIPS
 
-# --- size report -------------------------------------------------------------------------
+# --- local state report ------------------------------------------------------------------
+# What actually landed on disk, for after an interrupted run. Re-running the script then
+# finishes the job: completed sequences are skipped, partial archives resume.
+if [ "${VERIFY:-0}" != "0" ]; then
+    echo "Verifying ${#SEQUENCES[@]} sequence(s) under ${DATA_ROOT}"
+    echo
+    done_n=0; part_n=0; miss_n=0
+    for seq in "${SEQUENCES[@]}"; do
+        events="${DATA_ROOT}/train_events/${seq}/events/left"
+        flow="${DATA_ROOT}/train_optical_flow/${seq}/flow"
+        marker="${DATA_ROOT}/train_optical_flow/${seq}/.extracted"
+
+        if [ -f "${marker}" ] && [ -f "${events}/events.h5" ] && [ -f "${events}/rectify_map.h5" ]; then
+            n_png=$(find "${flow}/forward" -name '*.png' 2>/dev/null | wc -l)
+            n_ts=$(grep -cv '^\s*\(#.*\)\?$' "${flow}/forward_timestamps.txt" 2>/dev/null || echo 0)
+            if [ "${n_png}" -eq "${n_ts}" ] && [ "${n_png}" -gt 0 ]; then
+                printf '  %-20s OK        %4d flow maps\n' "${seq}" "${n_png}"
+                done_n=$((done_n+1))
+            else
+                printf '  %-20s MISMATCH  %d PNGs vs %d timestamps\n' "${seq}" "${n_png}" "${n_ts}"
+                part_n=$((part_n+1))
+            fi
+        elif [ -e "${events}/events.h5" ] || [ -e "${ZIP_DIR}/${seq}_events_left.zip" ]; then
+            printf '  %-20s PARTIAL   (re-run to resume)\n' "${seq}"
+            part_n=$((part_n+1))
+        else
+            printf '  %-20s missing\n' "${seq}"
+            miss_n=$((miss_n+1))
+        fi
+    done
+    echo
+    echo "complete: ${done_n}   partial: ${part_n}   missing: ${miss_n}   (of ${#SEQUENCES[@]})"
+    if [ "${done_n}" -eq "${#SEQUENCES[@]}" ]; then
+        echo "All sequences present. Next:  sbatch --array=0-17 hpc/preprocess.slurm"
+    else
+        echo "Finish with:  JOBS=4 bash hpc/download_dsec.sh"
+    fi
+    exit 0
+fi
+
+# --- remote size report -------------------------------------------------------------------
 if [ "${CHECK}" != "0" ]; then
     echo "Sequences: ${#SEQUENCES[@]}   target: ${DATA_ROOT}"
     printf '%s\n' "${SEQUENCES[@]}" | while read -r seq; do
