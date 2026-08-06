@@ -28,9 +28,9 @@
 #SBATCH --time=2-0:0:0
 #SBATCH --output=hpc/logs/%x_%j.out
 # 2 days is the hard cap for this QoS (`sacctmgr show qos bbgpu` -> MaxWall 2-00:00:00), so this
-# requests the maximum. At ~1.5-2.5 days the SNN may or may not fit one segment, hence the chain
-# in hpc/submit_train.sh. Override with `sbatch --time=...`, which takes precedence over this
-# directive -- submit_train.sh does that via WALLTIME.
+# requests the maximum. Smoke-test measured ~1h43m/epoch (60 epochs =~ 4.3 days), well over one
+# segment, hence the 3-segment chain in hpc/submit_train.sh. Override with `sbatch --time=...`,
+# which takes precedence over this directive -- submit_train.sh does that via WALLTIME.
 
 set -euo pipefail
 

@@ -3,7 +3,7 @@
 # per-epoch checkpoint via --dependency=afterok.
 #
 #   bash hpc/submit_train.sh ann          # ANN, 1 segment   (~20-35 h, fits one 2-day job)
-#   bash hpc/submit_train.sh snn          # SNN, 2 segments  (~1.5-2.5 days total)
+#   bash hpc/submit_train.sh snn          # SNN, 3 segments  (measured ~1h43m/epoch, ~4.3 days)
 #   SEGMENTS=4 bash hpc/submit_train.sh snn
 #   SMOKE=1   bash hpc/submit_train.sh ann      # 1 segment, 1 epoch, end-to-end check
 #   WALLTIME=12:0:0 bash hpc/submit_train.sh ann
@@ -23,7 +23,10 @@ mkdir -p hpc/logs
 MODEL="${1:-}"
 case "${MODEL}" in
     ann) SCRIPT=hpc/train_ann.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/ann_runid.txt}"; DEF_SEG=1 ;;
-    snn) SCRIPT=hpc/train_snn.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/snn_runid.txt}"; DEF_SEG=2 ;;
+    # 3 segments: the smoke test measured ~1h43m/epoch (not the ~35-60min originally guessed),
+    # so 60 epochs is ~103h -- 2 segments (96h capacity) is short; 3 (144h) has real margin for
+    # per-segment startup and any epoch killed mid-flight by the walltime.
+    snn) SCRIPT=hpc/train_snn.slurm; RUNID_FILE="${RUNID_FILE:-hpc/logs/snn_runid.txt}"; DEF_SEG=3 ;;
     *)   echo "usage: bash hpc/submit_train.sh {ann|snn}"; exit 1 ;;
 esac
 

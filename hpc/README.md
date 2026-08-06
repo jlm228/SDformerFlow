@@ -109,11 +109,11 @@ CONFIG=configs/valid_DSEC_ann.yml RUNID=$(cat hpc/logs/ann_runid.txt) sbatch hpc
 No crop and no remap: this model trains and tests at 480×640, so its swin position-bias tables
 are already correctly sized.
 
-## 4. Train the SNN (GPU, ~1.5–2.5 days)
+## 4. Train the SNN (GPU, measured ~1h43m/epoch -> ~4.3 days for 60 epochs)
 
 ```bash
 SMOKE=1 bash hpc/submit_train.sh snn    # 1 segment, 1 epoch
-bash hpc/submit_train.sh snn            # 2 chained segments
+bash hpc/submit_train.sh snn            # 3 chained segments (measured ~1h43m/epoch)
 ```
 
 Expect `Total parameters` ~**54.9 M**. `train_snn.slurm` also JIT-compiles a spikingjelly CuPy
@@ -151,7 +151,8 @@ worse one, and a plateau could lose many epochs to the walltime. Now:
 
 `best_loss` is persisted in the state dict and restored on resume, and `--resume` reads
 `model_latest` so weights and optimiser state come from the same epoch. **Worst case you lose one
-epoch** (~12–20 min ANN, ~35–60 min SNN); the ~200 MB write is negligible against that.
+epoch** (~12–20 min ANN, ~1h43m SNN — measured on the smoke test, not the ~35-60min originally
+guessed); the ~200 MB write is negligible against that.
 
 Chaining is what makes the walltime cap irrelevant. Each segment is a fresh MLflow run resuming
 the previous one's `model_latest`; the run id is handed along through `hpc/logs/{ann,snn}_runid.txt`
@@ -163,10 +164,10 @@ Starting a fresh chain while a `*_runid.txt` exists is refused — a stale id wo
 the wrong run. Either pass `PREV_RUNID=...` to continue, or delete the file.
 
 Scripts request `--time=2-0:0:0`, this QoS's hard cap (`sacctmgr show qos bbgpu` → `MaxWall
-2-00:00:00`). At that ceiling the ANN (~20–35 h) fits a single segment and the SNN (~1.5–2.5
-days) needs at most two, which is what `submit_train.sh` defaults to. Shorter requests can
-backfill sooner on a busy queue at the cost of more segments — `WALLTIME=12:0:0 bash
-hpc/submit_train.sh snn`.
+2-00:00:00`). At that ceiling the ANN (~20–35 h) fits a single segment and the SNN (measured
+~1h43m/epoch × 60 epochs ≈ 4.3 days) needs three, which is what `submit_train.sh` defaults to.
+Shorter requests can backfill sooner on a busy queue at the cost of more segments —
+`WALLTIME=12:0:0 bash hpc/submit_train.sh snn`.
 
 ## Monitoring
 
