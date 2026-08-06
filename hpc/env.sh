@@ -53,6 +53,13 @@ export PYTHONUNBUFFERED=1
 # don't hit fragmentation.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# spikingjelly==0.0.0.0.14's CUDA kernel dispatcher uses the numpy alias `np.int`, removed in
+# NumPy 1.24+ -- an open upstream bug (fangwei123456/spikingjelly#583), not something fixable by
+# editing this repo. sitecustomize.py restores the alias at interpreter startup for every
+# process that sources this file; putting it on PYTHONPATH (rather than patching site-packages)
+# keeps the fix git-tracked and durable across venv rebuilds. See that file for the rationale.
+export PYTHONPATH="${_ENV_DIR}/sitecustomize${PYTHONPATH:+:${PYTHONPATH}}"
+
 # spikingjelly JIT-compiles its CUDA kernels through CuPy at runtime (set_backend(..., "cupy")).
 # The cupy-cuda12x wheel bundles the toolkit, so no CUDA module is loaded here; if the JIT
 # fails on a compute node, that is the first thing to revisit.
