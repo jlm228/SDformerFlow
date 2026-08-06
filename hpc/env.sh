@@ -36,6 +36,12 @@ export IMAGEIO_USERDIR="${HOME}/.imageio"
 # Artifacts are large (a pickled whole-model checkpoint is ~200 MB), so keep this off /home.
 export SDF_MLFLOW_DIR="${SDF_MLFLOW_DIR:-${REPO_DIR}/mlruns}"
 
+# MLflow >=3 deprecated the plain filesystem tracking backend ("./mlruns") in favour of a
+# database backend, and refuses to use it at all unless this is set. load_model/resume_model
+# read run.info.artifact_uri straight off disk, so migrating to a DB backend would need those
+# rewritten -- opting out of the deprecation is the correct fix here, not a workaround.
+export MLFLOW_ALLOW_FILE_STORE=true
+
 # Slurm redirects stdout to a file rather than a tty, which makes Python block-buffer it: the
 # per-epoch print()s would then lag behind by kilobytes and appear out of order relative to the
 # tqdm bar (tqdm writes to stderr and flushes itself, so it stays live either way). Unbuffering
