@@ -75,15 +75,21 @@ def train(args, config_parser):
         ])
         transform_valid = None
     else:
+        # crop: Null means train at full resolution (e.g. the paper's best ANN row, en4 at
+        # 480x640) -- built unconditionally upstream, which crashed the moment a config
+        # actually left crop unset. eval_DSEC_flow_SNN.py already treats an unset crop as "no
+        # crop transform" the same way; mirrored here rather than inventing a new convention.
+        crop = config['loader']['crop']
+        crop_ops = [RandomCrop((crop[0], crop[1]))] if crop is not None else []
         transform_train = Compose([
             # RandomRotationFlip((0,0),config['loader']['augment_prob'][0],config['loader']['augment_prob'][1]),
-            RandomCrop((config['loader']['crop'][0],config['loader']['crop'][1])),
+            *crop_ops,
             Random_horizontal_flip(config['loader']['augment_prob'][0]),
             Random_vertical_flip(config['loader']['augment_prob'][1]),
             # Random_event_drop(max_drop_rate=config['loader']['max_drop_rate'])
         ])
 
-        transform_valid = Compose([CenterCrop((config['loader']['crop'][0], config['loader']['crop'][1]))])
+        transform_valid = Compose([CenterCrop((crop[0], crop[1]))]) if crop is not None else None
 
 
     if config['loader']['crop'] is not None:
