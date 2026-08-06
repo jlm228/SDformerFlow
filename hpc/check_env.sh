@@ -95,7 +95,19 @@ done
 
 echo
 if python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
-    echo "GPU: $(python -c 'import torch; print(torch.cuda.get_device_name(0))')"
+    python - <<'PY'
+import torch
+name = torch.cuda.get_device_name(0)
+gib = torch.cuda.get_device_properties(0).total_memory / 2**30
+print(f"GPU: {name}  ({gib:.1f} GiB)")
+# gpu:a100:1 requests the 40GB variant; the 80GB one needs gpu:a100_80:1. The ANN trains at
+# batch_size 8, full 480x640, fp32 (use_amp: False) -- that OOMs a 40GB card on the very first
+# step. If you see this on a train/evaluate job, the --gres in that .slurm file is wrong.
+if "A100" in name and gib < 60:
+    print("  WARNING: this is the 40GB A100. train_ann.slurm/train_snn.slurm/evaluate.slurm")
+    print("  request --gres=gpu:a100_80:1 -- if this job got the 40GB card anyway, check the")
+    print("  .slurm file wasn't reverted, or that the 80GB partition has capacity.")
+PY
     echo "spikingjelly CuPy backend:"
     python - <<'PY'
 import sys, torch

@@ -21,7 +21,7 @@
 #SBATCH --job-name=sdf_train_ann
 #SBATCH --qos=bbgpu
 #SBATCH --account=arnaboll-ai-research
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:a100_80:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

@@ -48,6 +48,11 @@ export MLFLOW_ALLOW_FILE_STORE=true
 # keeps `tail -f` on the job log an accurate view of where the run actually is.
 export PYTHONUNBUFFERED=1
 
+# Cheap insurance against allocator fragmentation causing an OOM despite enough total free
+# memory (torch itself suggests this in its CUDA OOM error message). No effect on jobs that
+# don't hit fragmentation.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # spikingjelly JIT-compiles its CUDA kernels through CuPy at runtime (set_backend(..., "cupy")).
 # The cupy-cuda12x wheel bundles the toolkit, so no CUDA module is loaded here; if the JIT
 # fails on a compute node, that is the first thing to revisit.
