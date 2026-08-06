@@ -383,13 +383,17 @@ def train(args, config_parser):
 
         # save model
         with torch.no_grad():
+            # Rolling checkpoint every epoch regardless of whether the loss improved -- written
+            # FIRST, so it lands even if the best-checkpoint save below fails for any reason
+            # (this order bit us once already on the ANN: an mlflow API break made the
+            # best-save raise, which killed the epoch loop before a later "latest" save could
+            # run, losing the entire epoch). BlueBEAR caps GPU jobs at 2 days and this run needs
+            # multiple chained segments, so saving only on improvement risks losing a whole
+            # plateau to the walltime.
+            save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=True)
             if epoch_loss < best_loss:
                 best_loss = epoch_loss
                 save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=False)
-            # Rolling checkpoint every epoch regardless of whether the loss improved. BlueBEAR
-            # caps GPU jobs at 2 days and this run needs 3-4 chained segments, so saving only on
-            # improvement risks losing a whole plateau to the walltime.
-            save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=True)
 
 
         #####validate after each 5 epoch############

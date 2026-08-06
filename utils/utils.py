@@ -143,7 +143,11 @@ def create_model_dir(path_results, runid):
 
 
 def save_model(model, artifact_path="model"):
-    mlflow.pytorch.log_model(model, artifact_path)
+    # mlflow >=2.something defaults serialization_format to "pt2" (a traced-graph export via
+    # torch.export, requiring a sample input). load_model here does a plain torch.load and
+    # unpickles a whole nn.Module, which is the "pickle" format's layout, not pt2's -- so this
+    # must be pinned explicitly rather than left on the new default.
+    mlflow.pytorch.log_model(model, artifact_path, serialization_format="pickle")
 
 
 def save_state_dict(optimizer,scheduler,scaler, epoch, best_loss=None,
