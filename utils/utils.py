@@ -1,9 +1,22 @@
 import os
+import shutil
 from models.STSwinNet.load_pretrained import remap_pretrained_keys_swin,load_pretrained_interpolate
 import mlflow
+import mlflow.pytorch
 import pandas as pd
 import torch
 from collections.abc import MutableMapping
+
+
+def _local_path_from_uri(uri):
+    """Strip a file:// artifact URI down to a plain OS path."""
+    root = uri
+    if root.startswith("file://"):
+        root = root[len("file://"):]
+    # file:///C:/... leaves a leading slash in front of the drive letter on Windows.
+    if os.name == "nt" and root.startswith("/") and len(root) > 2 and root[2] == ":":
+        root = root[1:]
+    return root
 
 
 def _resolve_artifact(run, artifact_path, filename):
@@ -16,14 +29,7 @@ def _resolve_artifact(run, artifact_path, filename):
 
     Returns an absolute path, or None if nothing matches.
     """
-    root = run.info.artifact_uri
-    if root.startswith("file://"):
-        root = root[len("file://"):]
-    # file:///C:/... leaves a leading slash in front of the drive letter on Windows.
-    if os.name == "nt" and root.startswith("/") and len(root) > 2 and root[2] == ":":
-        root = root[1:]
-
-    base = os.path.join(root, artifact_path)
+    base = os.path.join(_local_path_from_uri(run.info.artifact_uri), artifact_path)
     for candidate in (os.path.join(base, "data", filename), os.path.join(base, filename)):
         if os.path.isfile(candidate):
             return candidate
@@ -143,11 +149,29 @@ def create_model_dir(path_results, runid):
 
 
 def save_model(model, artifact_path="model"):
-    # mlflow >=2.something defaults serialization_format to "pt2" (a traced-graph export via
-    # torch.export, requiring a sample input). load_model here does a plain torch.load and
-    # unpickles a whole nn.Module, which is the "pickle" format's layout, not pt2's -- so this
-    # must be pinned explicitly rather than left on the new default.
-    mlflow.pytorch.log_model(model, artifact_path, serialization_format="pickle")
+    # mlflow.pytorch.log_model() is NOT used here, deliberately. In MLflow 3, every call to
+    # log_model() registers a brand-new "LoggedModel" entity in the tracking store -- by
+    # design, for checkpoint-lineage tracking (see the MLflow 3 docs on Logged Models). We call
+    # this once or twice per epoch, and under the filesystem tracking backend this pipeline is
+    # already forced onto (mlflow>=3 deprecated it; MLFLOW_ALLOW_FILE_STORE=true opts back in),
+    # the accumulating registry made each successive save progressively slower: measured ~30min,
+    # then ~1h16, then ~3h31 for consecutive epoch checkpoints, while actual training throughput
+    # stayed constant. Left running, this heads toward consuming the entire job on bookkeeping
+    # rather than training, or being SIGKILLed mid-write by the walltime and corrupting that
+    # epoch's checkpoint.
+    #
+    # This reproduction has no use for the registry (versioning, staged deployments, lineage
+    # UI) -- load_model only ever needs a stable file path per run. mlflow.pytorch.save_model()
+    # writes the identical on-disk layout (<path>/data/model.pth for serialization_format=
+    # "pickle") but is a pure local file write with no tracking-server or registry interaction
+    # at all, so _resolve_artifact needs no changes to find it.
+    run = mlflow.active_run()
+    local_dir = os.path.join(_local_path_from_uri(run.info.artifact_uri), artifact_path)
+    if os.path.isdir(local_dir):
+        # save_model refuses to write into a directory that already exists; the checkpoint at
+        # this artifact_path is fully replaced every call, so clear it first.
+        shutil.rmtree(local_dir)
+    mlflow.pytorch.save_model(model, local_dir, serialization_format="pickle")
 
 
 def save_state_dict(optimizer,scheduler,scaler, epoch, best_loss=None,
