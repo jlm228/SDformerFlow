@@ -143,8 +143,17 @@ class YAMLParser:
         Combines entries that had to be split because of MLFlow's max character limit.
         """
 
-        if "spiking_neuron" in config.keys():
+        # reset_config() always creates a top-level `spiking_neuron` key, separate from
+        # `model.spiking_neuron` -- populated for SNN runs (whose YAML has a real top-level
+        # `spiking_neuron:` section) but left at the {} default for ANN runs, which only ever
+        # set `model.spiking_neuron: Null` (nested). Promoting it unconditionally therefore
+        # clobbered a correctly-restored `model.spiking_neuron: None` with an empty dict on
+        # every ANN eval -- `{}` is not None, so downstream code that branches on
+        # `spiking_neuron is not None` took the SNN-only path and crashed on the missing keys.
+        # A truthy check preserves the real promotion for SNN runs while skipping it for ANN
+        # runs, where there is nothing meaningful to promote.
+        if config.get("spiking_neuron"):
             config["model"]["spiking_neuron"] = config["spiking_neuron"]
-            config.pop("spiking_neuron", None)
+        config.pop("spiking_neuron", None)
 
         return config
