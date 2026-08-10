@@ -78,7 +78,43 @@ def load_model(prev_runid, model, device, remap = None, test=False, artifact_pat
             load_pretrained_interpolate(model,pretrained_dict)
             del pretrained_model
             torch.cuda.empty_cache()
-        model.load_state_dict(pretrained_dict, strict=False)
+        # strict=False was previously used and its return value discarded -- so ANY mismatched
+        # or missing key silently left that layer at its random init_weights() value, with zero
+        # indication. For a reproduction the checkpoint either loads completely or we need to
+        # know why not; a badly-off evaluation (e.g. EPE ~5x target) with no error at all is
+        # exactly what a silent partial load looks like. Report what strict=False hid, and treat
+        # anything beyond the swin relative-position-bias buffers (which remap_pretrained_keys_swin
+        # / load_pretrained_interpolate deliberately rebuild under a size change, and which
+        # therefore legitimately differ in name/shape from the saved checkpoint) as fatal.
+        incompatible = model.load_state_dict(pretrained_dict, strict=False)
+        missing = incompatible.missing_keys
+        unexpected = incompatible.unexpected_keys
+        if missing or unexpected:
+            print("load_state_dict: {} missing key(s), {} unexpected key(s)".format(
+                len(missing), len(unexpected)))
+            for name in missing[:20]:
+                print("  missing:    " + name)
+            for name in unexpected[:20]:
+                print("  unexpected: " + name)
+
+        def _is_expected_remap_mismatch(name):
+            # Exactly the substrings load_pretrained_interpolate/remap_pretrained_keys_swin
+            # (models/STSwinNet/load_pretrained.py) delete outright and let the model
+            # re-initialise, rather than restore from the checkpoint.
+            return remap is not None and any(s in name for s in (
+                "relative_position_bias_table", "relative_position_index",
+                "relative_coords_table", "attn_mask",
+            ))
+
+        bad = [n for n in missing + unexpected if not _is_expected_remap_mismatch(n)]
+        if bad:
+            raise RuntimeError(
+                "Checkpoint for run '{}' did not load completely: {} key(s) mismatched "
+                "(beyond the swin position-bias buffers remap is expected to rebuild). The "
+                "model would otherwise silently evaluate with some layers still at their "
+                "random init_weights() values. First few: {}".format(
+                    prev_runid, len(bad), bad[:10])
+            )
         print("Model restored from " + prev_runid + " (" + artifact_path + ")\n")
     else:
         raise FileNotFoundError(
