@@ -186,7 +186,17 @@ def valid_test(args, config_parser):
 
 
             elif config['model']['encoding'] == 'voxel': #B, C, P, H, W
-                if config['loader']['polarity']:
+                # The two training scripts use OPPOSITE conventions for when to split polarity
+                # into its own dimension: the SNN does it when loader.polarity is True
+                # (train_flow_parallel_supervised_SNN.py:274), the ANN does it when polarity is
+                # False (train_flow_parallel_supervised.py:256, "if not ... polarity"). This
+                # script hardcoded the SNN's convention unconditionally, so with our ANN configs
+                # (polarity: True) it wrongly inserted a P=2 dimension the ANN never trained
+                # with -- STTFlowNet.forward's internal chunk/stack/permute then produced a 6D
+                # tensor instead of 5D. Branch on the same spiking_cfg discriminator used above.
+                split_polarity = config['loader']['polarity'] if spiking_cfg is not None \
+                    else not config['loader']['polarity']
+                if split_polarity:
                     # ignore polarity
                     neg = torch.nn.functional.relu(-chunk)
                     pos = torch.nn.functional.relu(chunk)
