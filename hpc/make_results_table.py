@@ -1,4 +1,8 @@
-"""Render evaluation results as a table shaped like the paper's Tables 3/4, for direct
+""":"
+exec python "$0" "$@"
+"""
+
+__doc__ = """Render evaluation results as a table shaped like the paper's Tables 3/4, for direct
 cross-checking. `results_inference/<runid>/metrics_N.yml` is a raw dump of eval_DSEC_flow_SNN.py's
 internal variable names, which do NOT match the paper's column labels 1:1 -- see the mapping
 below, taken from loss/flow_supervised.py's AEE/AAE classes:
