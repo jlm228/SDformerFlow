@@ -225,7 +225,15 @@ def valid_test(args, config_parser):
                 chunk[chunk > config['data']['spike_th']] = 1
                 chunk[chunk < config['data']['spike_th']] = 0
 
-            pred_list = model(chunk.to(device))
+            # STTFlowNet.forward(event_voxel, event_cnt, log=False) requires event_cnt with no
+            # default; both training scripts pass None for it (voxel encoding does not use it).
+            # SpikingformerFlowNet.forward(x, log=False) takes only one positional arg. This
+            # script evaluates both model families, so the call must match whichever was built --
+            # spiking_cfg is the same ANN/SNN discriminator used for the spikingjelly setup above.
+            if spiking_cfg is not None:
+                pred_list = model(chunk.to(device))
+            else:
+                pred_list = model(chunk.to(device), None)
             pred = pred_list["flow"][-1]
 
             # print(f'spike_seq_monitor.records=\n{spike_seq_monitor.records}')
