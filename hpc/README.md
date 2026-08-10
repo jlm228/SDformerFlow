@@ -103,7 +103,7 @@ Trains at **full 480×640** — that is what the Table 3 row reports, ~2.8× the
 ## 3. Evaluate the ANN
 
 ```bash
-CONFIG=configs/valid_DSEC_ann.yml RUNID=$(cat hpc/logs/ann_runid.txt) sbatch hpc/evaluate.slurm
+sbatch hpc/evaluate.slurm configs/valid_DSEC_ann.yml $(cat hpc/logs/ann_runid.txt)
 ```
 
 No crop and no remap: this model trains and tests at 480×640, so its swin position-bias tables
@@ -125,8 +125,8 @@ without ever wrapping in `DataParallel`, so it is broken.
 ## 5. Evaluate the SNN — both resolutions, one model
 
 ```bash
-CONFIG=configs/valid_DSEC_supervised.yml      RUNID=$(cat hpc/logs/snn_runid.txt) sbatch hpc/evaluate.slurm  # C
-CONFIG=configs/valid_DSEC_supervised_full.yml RUNID=$(cat hpc/logs/snn_runid.txt) sbatch hpc/evaluate.slurm  # F
+sbatch hpc/evaluate.slurm configs/valid_DSEC_supervised.yml      $(cat hpc/logs/snn_runid.txt)  # C
+sbatch hpc/evaluate.slurm configs/valid_DSEC_supervised_full.yml $(cat hpc/logs/snn_runid.txt)  # F
 ```
 
 Run both — two published numbers from one trained model at no extra training cost. If only one

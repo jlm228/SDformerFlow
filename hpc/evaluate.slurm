@@ -2,9 +2,18 @@
 # Evaluate a trained model on the DSEC validation split (5 sequences, 2152 samples) and print
 # AEE / AAE / outlier %. GPU job, short.
 #
-#   CONFIG=configs/valid_DSEC_ann.yml            RUNID=$(cat hpc/logs/ann_runid.txt) sbatch hpc/evaluate.slurm
-#   CONFIG=configs/valid_DSEC_supervised.yml     RUNID=$(cat hpc/logs/snn_runid.txt) sbatch hpc/evaluate.slurm
-#   CONFIG=configs/valid_DSEC_supervised_full.yml RUNID=$(cat hpc/logs/snn_runid.txt) sbatch hpc/evaluate.slurm
+#   sbatch hpc/evaluate.slurm configs/valid_DSEC_ann.yml             $(cat hpc/logs/ann_runid.txt)
+#   sbatch hpc/evaluate.slurm configs/valid_DSEC_supervised.yml      $(cat hpc/logs/snn_runid.txt)
+#   sbatch hpc/evaluate.slurm configs/valid_DSEC_supervised_full.yml $(cat hpc/logs/snn_runid.txt)
+#
+# CONFIG and RUNID are POSITIONAL arguments, not environment variables -- deliberately. This
+# cluster's sbatch does not propagate the submitting shell's environment into the job even with
+# an in-script `#SBATCH --export=ALL` directive (command-line `sbatch --export=ALL ...` does
+# work here, as submit_train.sh relies on, but the script-directive form silently does not --
+# apparently `--export` has to be resolved before sbatch parses the rest of the script). A
+# `CONFIG=... RUNID=... sbatch hpc/evaluate.slurm` invocation would therefore silently submit a
+# job with neither variable set. Positional args sidestep environment propagation entirely and
+# work on any Slurm installation.
 #
 # Published targets (EPE / outlier % / AEE):
 #   valid_DSEC_ann.yml             STTFlowNet-en4-b2-p4-w10        0.81 / 2.50 / 4.33  (Table 3 best)
@@ -17,6 +26,8 @@
 #
 # For the equivalent ANN-vs-SNN comparison use the ANN (0.81) against the SNN's F column (1.61):
 # same full-resolution test, capacity matched at 57.5 M vs 54.9 M.
+#
+# Once both are done:  python hpc/make_results_table.py
 
 #SBATCH --job-name=sdf_eval
 #SBATCH --qos=bbgpu
@@ -28,11 +39,6 @@
 #SBATCH --mem=32G
 #SBATCH --time=4:0:0
 #SBATCH --output=hpc/logs/%x_%j.out
-#SBATCH --export=ALL
-# Without --export=ALL, sbatch on this cluster does not propagate the submitting shell's
-# environment into the job -- `CONFIG=... RUNID=... sbatch hpc/evaluate.slurm` would otherwise
-# silently drop both, and CONFIG's ${CONFIG:?...} guard below would fail with a confusing
-# "CONFIG: set CONFIG=..." error that looks like the variable was never set at all.
 
 set -euo pipefail
 
@@ -40,8 +46,9 @@ cd "${SLURM_SUBMIT_DIR:-.}"
 mkdir -p hpc/logs
 source hpc/env.sh
 
-CONFIG="${CONFIG:?set CONFIG=configs/valid_DSEC_ann.yml (or valid_DSEC_supervised[_full].yml)}"
-RUNID="${RUNID:?set RUNID=<mlflow run id>, e.g. RUNID=\$(cat hpc/logs/ann_runid.txt)}"
+USAGE="usage: sbatch hpc/evaluate.slurm <config.yml> <runid>"
+CONFIG="${1:?${USAGE}}"
+RUNID="${2:?${USAGE}}"
 
 [ -f "${CONFIG}" ] || { echo "ERROR: ${CONFIG} not found."; exit 1; }
 
@@ -60,4 +67,5 @@ python eval_DSEC_flow_SNN.py \
     --runid "${RUNID}"
 
 echo
-echo "Done. Compare against the targets in this script's header."
+echo "Done. Compare against the targets in this script's header, or run:"
+echo "  python hpc/make_results_table.py"

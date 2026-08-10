@@ -7,7 +7,7 @@
 # Usually driven by hpc/submit_train.sh rather than sbatch'd directly:
 #   bash hpc/submit_train.sh snn                        # chained segments
 #   SMOKE=1 sbatch hpc/train_snn.slurm                  # 1 epoch, end-to-end check
-#   PREV_RUNID=<mlflow_run_id> sbatch hpc/train_snn.slurm   # resume one segment by hand
+#   PREV_RUNID=<mlflow_run_id> sbatch --export=ALL hpc/train_snn.slurm   # resume one segment by hand
 #
 # ~360k iterations (6000 samples / batch 1 x 60 epochs), or ~480k for the paper's 80 epochs,
 # plus a 30-epoch full-resolution fine-tune. On an A100-80 that is several days, and BlueBEAR

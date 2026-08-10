@@ -3,7 +3,7 @@
 #
 #   SMOKE=1 sbatch hpc/train_ann.slurm                      # 1 epoch, checks end-to-end
 #   sbatch hpc/train_ann.slurm                              # full 100-epoch run
-#   PREV_RUNID=<mlflow_run_id> sbatch hpc/train_ann.slurm   # resume an interrupted run
+#   PREV_RUNID=<mlflow_run_id> sbatch --export=ALL hpc/train_ann.slurm   # resume an interrupted run
 #   CONFIG=configs/train_DSEC_supervised_STT_voxel.yml sbatch hpc/train_ann.slurm   # en3 variant
 #
 # Default config reproduces the BEST row of the paper's Table 3: STTFlowNet-en4-b2-p4-w10,
@@ -103,4 +103,4 @@ python train_flow_parallel_supervised.py \
 
 echo
 echo "Done. Run id in ${RUNID_FILE}. Evaluate with:"
-echo "  CONFIG=configs/valid_DSEC_ann.yml RUNID=\$(cat ${RUNID_FILE}) sbatch hpc/evaluate.slurm"
+echo "  sbatch hpc/evaluate.slurm configs/valid_DSEC_ann.yml \$(cat ${RUNID_FILE})"
