@@ -138,6 +138,21 @@ tables interpolated to a larger window: 480/288 = 1.667 and 9 × 1.667 = 15, hen
 own values, shipped commented out in `valid_DSEC_supervised.yml`. Without the remap you still
 get numbers, from position biases sized for the wrong window.
 
+## 6. Read the results
+
+```bash
+python hpc/make_results_table.py
+```
+
+`results_inference/<runid>/metrics_N.yml` is a raw dump of `eval_DSEC_flow_SNN.py`'s internal
+variable names, which do **not** match the paper's column labels directly — `AEE` is pixel
+endpoint error (the paper's *EPE* column), `AEE_outliers` is a **0–1 fraction** (×100 for the
+paper's *Outlier %*), and `AAE` is angular error in degrees (the paper's own — confusingly named
+— *AEE* column). This script does that translation and prints a table against the Table 3/4
+targets, with the delta so a near-miss is easy to see at a glance. It auto-discovers both run
+ids from `hpc/logs/{ann,snn}_runid.txt` and — since the SNN's C and F evals share one run id —
+disambiguates them by each `eval_N.yml`'s recorded `loader.crop`, not by evaluation order.
+
 ## Checkpointing and resume
 
 Upstream saved **only when training loss improved**, with no periodic save, and reset `best_loss`

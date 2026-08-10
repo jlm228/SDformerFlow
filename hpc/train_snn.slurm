@@ -27,10 +27,16 @@
 #SBATCH --mem=64G
 #SBATCH --time=2-0:0:0
 #SBATCH --output=hpc/logs/%x_%j.out
+#SBATCH --export=ALL
 # 2 days is the hard cap for this QoS (`sacctmgr show qos bbgpu` -> MaxWall 2-00:00:00), so this
 # requests the maximum. Smoke-test measured ~1h43m/epoch (60 epochs =~ 4.3 days), well over one
-# segment, hence the 3-segment chain in hpc/submit_train.sh. Override with `sbatch --time=...`,
+# segment, hence the multi-segment chain in hpc/submit_train.sh. Override with `sbatch --time=...`,
 # which takes precedence over this directive -- submit_train.sh does that via WALLTIME.
+#
+# --export=ALL: without it, sbatch on this cluster does not propagate the submitting shell's
+# environment into the job, so a direct `PREV_RUNID=... sbatch hpc/train_snn.slurm` would
+# silently resume from nothing instead of the given run. submit_train.sh already passes
+# --export=ALL itself; this makes a direct sbatch call safe too.
 
 set -euo pipefail
 

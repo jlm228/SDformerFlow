@@ -28,6 +28,11 @@
 #SBATCH --mem=32G
 #SBATCH --time=4:0:0
 #SBATCH --output=hpc/logs/%x_%j.out
+#SBATCH --export=ALL
+# Without --export=ALL, sbatch on this cluster does not propagate the submitting shell's
+# environment into the job -- `CONFIG=... RUNID=... sbatch hpc/evaluate.slurm` would otherwise
+# silently drop both, and CONFIG's ${CONFIG:?...} guard below would fail with a confusing
+# "CONFIG: set CONFIG=..." error that looks like the variable was never set at all.
 
 set -euo pipefail
 

@@ -28,10 +28,16 @@
 #SBATCH --mem=64G
 #SBATCH --time=2-0:0:0
 #SBATCH --output=hpc/logs/%x_%j.out
+#SBATCH --export=ALL
 # 2 days is the hard cap for this QoS (`sacctmgr show qos bbgpu` -> MaxWall 2-00:00:00), so this
 # requests the maximum. At ~20-35 h the ANN should finish inside a single segment; the chain in
 # hpc/submit_train.sh exists as insurance, not necessity. Override with `sbatch --time=...`,
 # which takes precedence over this directive -- submit_train.sh does that via WALLTIME.
+#
+# --export=ALL: without it, sbatch on this cluster does not propagate the submitting shell's
+# environment into the job, so a direct `PREV_RUNID=... sbatch hpc/train_ann.slurm` (the manual
+# resume path documented above) would silently resume from nothing instead of the given run.
+# submit_train.sh already passes --export=ALL itself; this makes a direct sbatch call safe too.
 
 set -euo pipefail
 
