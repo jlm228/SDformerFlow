@@ -4,8 +4,7 @@ import mlflow
 from configs.parser import YAMLParser
 from loss.flow_supervised import *
 from models.STSwinNet_SNN.Spiking_STSwinNet import SpikingformerFlowNet,MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4
-# The model is built via eval(config["model"]["name"]), so the ANN classes must be in scope
-# here too -- this script is the DSEC evaluator for both the ANN and the SNN despite its name.
+# Evaluates both the ANN and the SNN; the model class is resolved dynamically via eval(name).
 from models.STSwinNet.STSwinNet import STTFlowNet, STTFlowNet_4en
 from tqdm import tqdm
 from utils.mlflow import log_config, log_results
@@ -101,9 +100,7 @@ def valid_test(args, config_parser):
 
     model = load_model(args.runid, model, device, remap = remap, test = True) # delete the relative positioning bias and index
 
-    # The ANN configs set `spiking_neuron: Null` and carry no `data.step_mode`, so all of the
-    # spikingjelly setup below is SNN-only. Running it for STTFlowNet raised TypeError on
-    # None["neuron_type"].
+    # None for the ANN, a dict of neuron settings for the SNN.
     spiking_cfg = config["model"].get("spiking_neuron")
 
     if spiking_cfg is not None:
@@ -120,7 +117,6 @@ def valid_test(args, config_parser):
         }
         neuron_type = spiking_cfg["neuron_type"]
         if neuron_type not in neuron_types:
-            # was `raise "..."`, which is itself a TypeError rather than the intended error
             raise NotImplementedError("neurontype not implemented: {}".format(neuron_type))
         neurontype = neuron_types[neuron_type]
 
@@ -186,21 +182,9 @@ def valid_test(args, config_parser):
 
 
             elif config['model']['encoding'] == 'voxel': #B, C, P, H, W
-                # The two training scripts diverge on more than just WHEN to split polarity into
-                # its own dimension (SNN: train_flow_parallel_supervised_SNN.py:274 splits "if
-                # polarity"; ANN: train_flow_parallel_supervised.py:256 splits "if not
-                # polarity") -- they also differ on how chunk_vis (the visualization-only pos/neg
-                # summary image) relates to that split. The ANN always computes pos/neg and
-                # always uses them for chunk_vis when vis is enabled, regardless of whether
-                # chunk itself gets the extra dimension; the SNN only has pos/neg (and thus a
-                # stacked chunk_vis) in the branch where the split actually happens. Unifying
-                # these into one shared boolean gave the ANN a 3D chunk_vis (a plain channel-sum,
-                # since pos/neg were never computed) where visualization.py expects 4D -- hence
-                # "IndexError: tuple index out of range" on events.shape[3]. Replicating each
-                # training script's own branch exactly, gated on the same spiking_cfg
-                # discriminator used above, avoids further guessing.
+                # SNN: polarity is split into its own dimension when loader.polarity is set.
+                # ANN: split when loader.polarity is NOT set (see the else branch below).
                 if spiking_cfg is not None:
-                    # SNN convention.
                     if config['loader']['polarity']:
                         neg = torch.nn.functional.relu(-chunk)
                         pos = torch.nn.functional.relu(chunk)
@@ -212,7 +196,6 @@ def valid_test(args, config_parser):
                         if config["vis"]["enabled"]:
                             chunk_vis = torch.sum(chunk, dim=1).detach()
                 else:
-                    # ANN convention: pos/neg (and therefore chunk_vis) are unconditional.
                     neg = torch.nn.functional.relu(-chunk)
                     pos = torch.nn.functional.relu(chunk)
                     if not config['loader']['polarity']:
@@ -225,32 +208,29 @@ def valid_test(args, config_parser):
                 print("Config error: Event encoding not support.")
                 raise AttributeError
 
-            # normalize input
-            if config["model"]["norm_input"]== "minmax":
-                min, max = (
-                    torch.min(chunk[chunk != 0]),
-                    torch.max(chunk[chunk != 0]),
-                )
-                if not min == max:
-                    chunk[chunk != 0] = (chunk[chunk != 0] - min) / (max-min)
-            elif config["model"]["norm_input"]== "std":
-                mean, stddev = (
-                    chunk[chunk != 0].mean(),
-                    chunk[chunk != 0].std(),
-                )
-                if stddev > 0:
-                    chunk[chunk != 0] = (chunk[chunk != 0] - mean) / stddev
+            # SNN only: the ANN trains and evaluates on raw, unnormalized voxel values.
+            if spiking_cfg is not None:
+                if config["model"]["norm_input"]== "minmax":
+                    min, max = (
+                        torch.min(chunk[chunk != 0]),
+                        torch.max(chunk[chunk != 0]),
+                    )
+                    if not min == max:
+                        chunk[chunk != 0] = (chunk[chunk != 0] - min) / (max-min)
+                elif config["model"]["norm_input"]== "std":
+                    mean, stddev = (
+                        chunk[chunk != 0].mean(),
+                        chunk[chunk != 0].std(),
+                    )
+                    if stddev > 0:
+                        chunk[chunk != 0] = (chunk[chunk != 0] - mean) / stddev
 
             # spike input
             if config['data']['spike_th'] is not None:
                 chunk[chunk > config['data']['spike_th']] = 1
                 chunk[chunk < config['data']['spike_th']] = 0
 
-            # STTFlowNet.forward(event_voxel, event_cnt, log=False) requires event_cnt with no
-            # default; both training scripts pass None for it (voxel encoding does not use it).
-            # SpikingformerFlowNet.forward(x, log=False) takes only one positional arg. This
-            # script evaluates both model families, so the call must match whichever was built --
-            # spiking_cfg is the same ANN/SNN discriminator used for the spikingjelly setup above.
+            # SpikingformerFlowNet.forward(x); STTFlowNet.forward(event_voxel, event_cnt).
             if spiking_cfg is not None:
                 pred_list = model(chunk.to(device))
             else:
@@ -281,14 +261,6 @@ def valid_test(args, config_parser):
 
 
 
-        # Python's `and` binds tighter than `or`, so the original
-        # `enabled or store_att or store and batch_size==1` parsed as
-        # `enabled or store_att or (store and batch_size==1)` -- meaning with vis.enabled True
-        # (as every eval config here sets, prior to disabling it for headless runs) flow_vis got
-        # computed regardless of batch_size, and with store=True but batch_size!=1 and both
-        # enabled/store_att False, flow_vis would never be computed at all despite vis.store()
-        # below unconditionally using it -- a latent NameError. vis.update() already has its own
-        # batch_size==1 guard, so that constraint belongs only to the "enabled" clause.
         if (config["vis"]["enabled"] and config["loader"]["batch_size"] == 1) \
                 or config["vis"]["store_att"] or config["vis"]["store"]:
             flow_vis = pred.clone()

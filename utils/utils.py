@@ -20,14 +20,9 @@ def _local_path_from_uri(uri):
 
 
 def _resolve_artifact(run, artifact_path, filename):
-    """Locate a file inside a run's artifacts, tolerating MLflow layout differences.
-
-    This module was written against the MLflow 1.x pytorch layout
-    (`<artifact_path>/data/model.pth`, but `<artifact_path>/state_dict.pth` for state dicts).
-    Later MLflow versions moved things around, so try the known layouts first and then fall
-    back to walking the artifact subtree, rather than failing on a hardcoded path.
-
-    Returns an absolute path, or None if nothing matches.
+    """Locate a file inside a run's artifacts. Tries the standard pytorch-flavor layout
+    (`<artifact_path>/data/<filename>`) and a flat layout, then falls back to walking the
+    artifact subtree. Returns an absolute path, or None if nothing matches.
     """
     base = os.path.join(_local_path_from_uri(run.info.artifact_uri), artifact_path)
     for candidate in (os.path.join(base, "data", filename), os.path.join(base, filename)):
@@ -43,9 +38,7 @@ def _resolve_artifact(run, artifact_path, filename):
 
 #for test or finetune
 def load_model(prev_runid, model, device, remap = None, test=False, artifact_path="model"):
-    # An empty run id is the legitimate "train from scratch" path. A non-empty one that
-    # does not resolve is always a mistake, and must not fall through silently: doing so
-    # evaluates a randomly initialised network and still prints plausible metrics.
+    # An empty run id means train from scratch.
     if not prev_runid:
         return model
 
@@ -60,9 +53,7 @@ def load_model(prev_runid, model, device, remap = None, test=False, artifact_pat
     model_dir = _resolve_artifact(run, artifact_path, "model.pth")
 
     if model_dir is not None:
-        # weights_only=False is required: this checkpoint is a pickled whole nn.Module, not a
-        # state_dict, and torch >= 2.6 defaults weights_only to True. Safe here because these
-        # are checkpoints this pipeline wrote itself, never third-party files.
+        # weights_only=False: this checkpoint is a pickled whole nn.Module, not a state_dict.
         pretrained_model = torch.load(model_dir, map_location=device, weights_only=False)
         #model.load_state_dict(model_loaded.state_dict())
         #for data parallel model
@@ -78,14 +69,6 @@ def load_model(prev_runid, model, device, remap = None, test=False, artifact_pat
             load_pretrained_interpolate(model,pretrained_dict)
             del pretrained_model
             torch.cuda.empty_cache()
-        # strict=False was previously used and its return value discarded -- so ANY mismatched
-        # or missing key silently left that layer at its random init_weights() value, with zero
-        # indication. For a reproduction the checkpoint either loads completely or we need to
-        # know why not; a badly-off evaluation (e.g. EPE ~5x target) with no error at all is
-        # exactly what a silent partial load looks like. Report what strict=False hid, and treat
-        # anything beyond the swin relative-position-bias buffers (which remap_pretrained_keys_swin
-        # / load_pretrained_interpolate deliberately rebuild under a size change, and which
-        # therefore legitimately differ in name/shape from the saved checkpoint) as fatal.
         incompatible = model.load_state_dict(pretrained_dict, strict=False)
         missing = incompatible.missing_keys
         unexpected = incompatible.unexpected_keys
@@ -98,9 +81,8 @@ def load_model(prev_runid, model, device, remap = None, test=False, artifact_pat
                 print("  unexpected: " + name)
 
         def _is_expected_remap_mismatch(name):
-            # Exactly the substrings load_pretrained_interpolate/remap_pretrained_keys_swin
-            # (models/STSwinNet/load_pretrained.py) delete outright and let the model
-            # re-initialise, rather than restore from the checkpoint.
+            # Buffers load_pretrained_interpolate/remap_pretrained_keys_swin rebuild under a
+            # window-size change rather than restore from the checkpoint.
             return remap is not None and any(s in name for s in (
                 "relative_position_bias_table", "relative_position_index",
                 "relative_coords_table", "attn_mask",
@@ -109,11 +91,8 @@ def load_model(prev_runid, model, device, remap = None, test=False, artifact_pat
         bad = [n for n in missing + unexpected if not _is_expected_remap_mismatch(n)]
         if bad:
             raise RuntimeError(
-                "Checkpoint for run '{}' did not load completely: {} key(s) mismatched "
-                "(beyond the swin position-bias buffers remap is expected to rebuild). The "
-                "model would otherwise silently evaluate with some layers still at their "
-                "random init_weights() values. First few: {}".format(
-                    prev_runid, len(bad), bad[:10])
+                "Checkpoint for run '{}' did not load completely: {} key(s) mismatched. "
+                "First few: {}".format(prev_runid, len(bad), bad[:10])
             )
         print("Model restored from " + prev_runid + " (" + artifact_path + ")\n")
     else:
@@ -135,8 +114,6 @@ def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device
 
     if state_dir is not None:
 
-        # weights_only=False: the payload holds optimizer/scheduler/scaler state, not just
-        # tensors. torch >= 2.6 defaults this to True. See the note in load_model.
         state_dict = torch.load(state_dir, map_location=device, weights_only=False)
         # for item in state_dict["optimizer"]["state"]:
         #     print(state_dict["optimizer"]["state"][item]["exp_avg"].shape)
@@ -147,8 +124,6 @@ def resume_model(prev_runid, optimizer, scheduler, scaler, epoch_initial, device
         if "scaler" in state_dict.keys() and scaler is not None:
             scaler.load_state_dict(state_dict["scaler"])
         epoch_initial = state_dict["epoch"] + 1
-        # Carry the best-loss watermark across restarts. Without this it resets to 1e6
-        # and the first epoch after every resume overwrites the best model with a worse one.
         if state_dict.get("best_loss") is not None:
             best_loss = state_dict["best_loss"]
 
@@ -185,27 +160,11 @@ def create_model_dir(path_results, runid):
 
 
 def save_model(model, artifact_path="model"):
-    # mlflow.pytorch.log_model() is NOT used here, deliberately. In MLflow 3, every call to
-    # log_model() registers a brand-new "LoggedModel" entity in the tracking store -- by
-    # design, for checkpoint-lineage tracking (see the MLflow 3 docs on Logged Models). We call
-    # this once or twice per epoch, and under the filesystem tracking backend this pipeline is
-    # already forced onto (mlflow>=3 deprecated it; MLFLOW_ALLOW_FILE_STORE=true opts back in),
-    # the accumulating registry made each successive save progressively slower: measured ~30min,
-    # then ~1h16, then ~3h31 for consecutive epoch checkpoints, while actual training throughput
-    # stayed constant. Left running, this heads toward consuming the entire job on bookkeeping
-    # rather than training, or being SIGKILLed mid-write by the walltime and corrupting that
-    # epoch's checkpoint.
-    #
-    # This reproduction has no use for the registry (versioning, staged deployments, lineage
-    # UI) -- load_model only ever needs a stable file path per run. mlflow.pytorch.save_model()
-    # writes the identical on-disk layout (<path>/data/model.pth for serialization_format=
-    # "pickle") but is a pure local file write with no tracking-server or registry interaction
-    # at all, so _resolve_artifact needs no changes to find it.
+    # Writes directly into the active run's artifact directory rather than going through
+    # mlflow.pytorch.log_model()'s tracking-server/registry path.
     run = mlflow.active_run()
     local_dir = os.path.join(_local_path_from_uri(run.info.artifact_uri), artifact_path)
     if os.path.isdir(local_dir):
-        # save_model refuses to write into a directory that already exists; the checkpoint at
-        # this artifact_path is fully replaced every call, so clear it first.
         shutil.rmtree(local_dir)
     mlflow.pytorch.save_model(model, local_dir, serialization_format="pickle")
 
@@ -223,11 +182,9 @@ def save_state_dict(optimizer,scheduler,scaler, epoch, best_loss=None,
 
 
 def save_checkpoint(model, optimizer, scheduler, scaler, epoch, best_loss, latest=True):
-    """Write one checkpoint pair (weights + training state).
-
-    `latest=True` writes the per-epoch rolling checkpoint that --resume reads; `latest=False`
-    writes the best-loss checkpoint that evaluation reads. They are kept in separate artifact
-    paths so a resume near the end of training cannot clobber the best model.
+    """Write one checkpoint pair (weights + training state). `latest=True` writes the
+    per-epoch rolling checkpoint that --resume reads; `latest=False` writes the best-loss
+    checkpoint that evaluation reads.
     """
     suffix = "_latest" if latest else ""
     save_model(model, artifact_path="model" + suffix)
