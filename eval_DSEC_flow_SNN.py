@@ -186,28 +186,39 @@ def valid_test(args, config_parser):
 
 
             elif config['model']['encoding'] == 'voxel': #B, C, P, H, W
-                # The two training scripts use OPPOSITE conventions for when to split polarity
-                # into its own dimension: the SNN does it when loader.polarity is True
-                # (train_flow_parallel_supervised_SNN.py:274), the ANN does it when polarity is
-                # False (train_flow_parallel_supervised.py:256, "if not ... polarity"). This
-                # script hardcoded the SNN's convention unconditionally, so with our ANN configs
-                # (polarity: True) it wrongly inserted a P=2 dimension the ANN never trained
-                # with -- STTFlowNet.forward's internal chunk/stack/permute then produced a 6D
-                # tensor instead of 5D. Branch on the same spiking_cfg discriminator used above.
-                split_polarity = config['loader']['polarity'] if spiking_cfg is not None \
-                    else not config['loader']['polarity']
-                if split_polarity:
-                    # ignore polarity
+                # The two training scripts diverge on more than just WHEN to split polarity into
+                # its own dimension (SNN: train_flow_parallel_supervised_SNN.py:274 splits "if
+                # polarity"; ANN: train_flow_parallel_supervised.py:256 splits "if not
+                # polarity") -- they also differ on how chunk_vis (the visualization-only pos/neg
+                # summary image) relates to that split. The ANN always computes pos/neg and
+                # always uses them for chunk_vis when vis is enabled, regardless of whether
+                # chunk itself gets the extra dimension; the SNN only has pos/neg (and thus a
+                # stacked chunk_vis) in the branch where the split actually happens. Unifying
+                # these into one shared boolean gave the ANN a 3D chunk_vis (a plain channel-sum,
+                # since pos/neg were never computed) where visualization.py expects 4D -- hence
+                # "IndexError: tuple index out of range" on events.shape[3]. Replicating each
+                # training script's own branch exactly, gated on the same spiking_cfg
+                # discriminator used above, avoids further guessing.
+                if spiking_cfg is not None:
+                    # SNN convention.
+                    if config['loader']['polarity']:
+                        neg = torch.nn.functional.relu(-chunk)
+                        pos = torch.nn.functional.relu(chunk)
+                        chunk = torch.cat((torch.unsqueeze(pos, dim=2), torch.unsqueeze(neg, dim=2)),
+                                          dim=2)  # B,C=20,P=2,H,W   B C, P, H, W
+                        if config["vis"]["enabled"]:
+                            chunk_vis = torch.stack((torch.sum(pos, dim=1), torch.sum(neg, dim=1)), dim=1)
+                    else:
+                        if config["vis"]["enabled"]:
+                            chunk_vis = torch.sum(chunk, dim=1).detach()
+                else:
+                    # ANN convention: pos/neg (and therefore chunk_vis) are unconditional.
                     neg = torch.nn.functional.relu(-chunk)
                     pos = torch.nn.functional.relu(chunk)
-                    # chunk = torch.abs(chunk)
-                    chunk = torch.cat((torch.unsqueeze(pos, dim=2), torch.unsqueeze(neg, dim=2)),
-                                      dim=2)  # B,C=20,P=2,H,W   B C, P, H, W
+                    if not config['loader']['polarity']:
+                        chunk = torch.cat((torch.unsqueeze(pos, dim=2), torch.unsqueeze(neg, dim=2)), dim=2)
                     if config["vis"]["enabled"]:
                         chunk_vis = torch.stack((torch.sum(pos, dim=1), torch.sum(neg, dim=1)), dim=1)
-                else:
-                    if config["vis"]["enabled"]:
-                        chunk_vis = torch.sum(chunk, dim=1).detach()
 
 
             else:
@@ -270,7 +281,16 @@ def valid_test(args, config_parser):
 
 
 
-        if config["vis"]["enabled"]  or config["vis"]["store_att"] or config["vis"]["store"] and config["loader"]["batch_size"] == 1:
+        # Python's `and` binds tighter than `or`, so the original
+        # `enabled or store_att or store and batch_size==1` parsed as
+        # `enabled or store_att or (store and batch_size==1)` -- meaning with vis.enabled True
+        # (as every eval config here sets, prior to disabling it for headless runs) flow_vis got
+        # computed regardless of batch_size, and with store=True but batch_size!=1 and both
+        # enabled/store_att False, flow_vis would never be computed at all despite vis.store()
+        # below unconditionally using it -- a latent NameError. vis.update() already has its own
+        # batch_size==1 guard, so that constraint belongs only to the "enabled" clause.
+        if (config["vis"]["enabled"] and config["loader"]["batch_size"] == 1) \
+                or config["vis"]["store_att"] or config["vis"]["store"]:
             flow_vis = pred.clone()
             # flow_vis *= mask
 

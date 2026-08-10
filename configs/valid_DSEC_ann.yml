@@ -39,9 +39,16 @@ metrics:
 
 vis:
     verbose: False
-    enabled: True
+    # False: cv2.imshow/namedWindow in Visualization_DSEC.update() need a real X display and
+    # will crash (or abort the whole process under Qt) on a headless Slurm compute node. Has no
+    # effect on the AEE/AAE metrics computed below -- those never touch chunk_vis/flow_vis/vis.
+    enabled: False
     px: 400
     store: False
+    # Must be present, not just absent: eval_DSEC_flow_SNN.py reads config["vis"]["store_att"]
+    # via `enabled or store_att or ...`, which raises KeyError the moment `enabled` is False and
+    # Python's `or` no longer short-circuits before reaching it.
+    store_att: False
     monitor_fr: False
     monitor_v: False
 
