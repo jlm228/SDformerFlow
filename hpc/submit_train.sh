@@ -49,6 +49,23 @@ if [ -z "${PREV_RUNID:-}" ] && [ -f "${RUNID_FILE}" ]; then
     exit 1
 fi
 
+# A run that crashed before finishing an epoch exists in mlruns/ but holds no checkpoint, so
+# resuming from it fails inside the job -- after queueing. Check here instead, and list the
+# runs that do have one.
+if [ -n "${PREV_RUNID:-}" ]; then
+    MLRUNS_DIR="${SDF_MLFLOW_DIR:-mlruns}"
+    if [ -d "${MLRUNS_DIR}" ] && ! ls -d "${MLRUNS_DIR}"/*/"${PREV_RUNID}"/artifacts/model_latest >/dev/null 2>&1; then
+        echo "ERROR: run '${PREV_RUNID}' has no model_latest checkpoint -- it never completed an epoch."
+        echo
+        echo "Runs that DO have a resumable checkpoint (newest last):"
+        ls -dtr "${MLRUNS_DIR}"/*/*/artifacts/model_latest 2>/dev/null | while read -r p; do
+            rid="$(basename "$(dirname "$(dirname "${p}")")")"
+            printf '  %s  (last written %s)\n' "${rid}" "$(date -r "${p}" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+        done
+        exit 1
+    fi
+fi
+
 echo "model=${MODEL} | segments=${SEGMENTS} | walltime=${WALLTIME} | runid_file=${RUNID_FILE}"
 echo
 
