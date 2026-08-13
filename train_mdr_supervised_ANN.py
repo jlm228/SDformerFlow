@@ -197,7 +197,7 @@ def train(args, config_parser):
         train_loss = 0.
 
 
-        for data in tqdm(train_dataloader, miniters=max(1, len(train_dataloader) // 100)):
+        for data in tqdm(train_dataloader, miniters=len(train_dataloader) // 100 or 1):
             chunk = data['d_event_volume_new'].to(device=device, dtype=torch.float32)
             if config["data"]["num_chunks"] == 2:
                 chunk_old = data['d_event_volume_old'].to(device=device, dtype=torch.float32)
@@ -322,7 +322,7 @@ def train(args, config_parser):
 
             #desactivate autograd
             with torch.set_grad_enabled(False):
-                for data in tqdm(valid_dataloader, miniters=max(1, len(valid_dataloader) // 100)):
+                for data in tqdm(valid_dataloader, miniters=len(valid_dataloader) // 100 or 1):
                     chunk = data['event_volume_new'].to(device=device, dtype=torch.float32)
                     if config["data"]["num_chunks"] == 2:
                         chunk_old = data['event_volume_old'].to(device=device, dtype=torch.float32)

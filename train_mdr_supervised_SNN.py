@@ -202,7 +202,7 @@ def train(args, config_parser):
         sample = 0
         train_loss = 0.
         # spiking_rates = collections.defaultdict(list)
-        for data in tqdm(train_dataloader, miniters=max(1, len(train_dataloader) // 100)):
+        for data in tqdm(train_dataloader, miniters=len(train_dataloader) // 100 or 1):
 
             functional.reset_net(model)
             functional.set_step_mode(model, config['data']['step_mode']) #layer-by-layer
@@ -353,7 +353,7 @@ def train(args, config_parser):
 
             #desactivate autograd
             with torch.set_grad_enabled(False):
-                for data in tqdm(valid_dataloader, miniters=max(1, len(valid_dataloader) // 100)):
+                for data in tqdm(valid_dataloader, miniters=len(valid_dataloader) // 100 or 1):
                     functional.reset_net(model)
                     functional.set_step_mode(model, config['data']['step_mode'])
 
