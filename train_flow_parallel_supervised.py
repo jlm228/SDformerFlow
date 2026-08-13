@@ -228,8 +228,7 @@ def train(args, config_parser):
         train_loss = 0.
 
 
-        for chunk, mask, label in tqdm(train_dataloader):
-            torch.autograd.set_detect_anomaly(True)
+        for chunk, mask, label in tqdm(train_dataloader, miniters=max(1, len(train_dataloader) // 100)):
             chunk = chunk.to(device=device, dtype=torch.float32) #[B,20,2,H,W]
             label = label.to(device=device, dtype=torch.float32)  # [num_batches, 2, H, W]
             mask = mask.to(device=device)
@@ -273,7 +272,7 @@ def train(args, config_parser):
                     curr_loss = loss_function(pred_list["flow"], label, mask, gamma = config["loss"]["gamma"])/num_acc_steps
 
                 if np.isnan(curr_loss.item()):
-                    raise
+                    raise RuntimeError("NaN loss in forward pass")
 
             if scaler is not None:
                 scaler.scale(curr_loss).backward()
@@ -353,7 +352,7 @@ def train(args, config_parser):
 
             #desactivate autograd
             with torch.set_grad_enabled(False):
-                for chunk, mask, label in tqdm(valid_dataloader):
+                for chunk, mask, label in tqdm(valid_dataloader, miniters=max(1, len(valid_dataloader) // 100)):
 
                     chunk = chunk.to(device=device, dtype=torch.float32)
                     label = label.to(device=device, dtype=torch.float32)  # [num_batches, 2, H, W]

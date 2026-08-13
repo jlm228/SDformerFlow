@@ -247,8 +247,7 @@ def train(args, config_parser):
         sample = 0
         train_loss = 0.
         # spiking_rates = collections.defaultdict(list)
-        for chunk, mask, label in tqdm(train_dataloader):
-            torch.autograd.set_detect_anomaly(True)
+        for chunk, mask, label in tqdm(train_dataloader, miniters=max(1, len(train_dataloader) // 100)):
 
             functional.reset_net(model)
             functional.set_step_mode(model, config['data']['step_mode']) #layer-by-layer
@@ -324,7 +323,7 @@ def train(args, config_parser):
                 # print("loss: ", curr_loss.item())
 
                 if np.isnan(curr_loss.item()):
-                    raise
+                    raise RuntimeError("NaN loss in forward pass")
 
             if scaler is not None:
                 scaler.scale(curr_loss).backward()
@@ -405,7 +404,7 @@ def train(args, config_parser):
 
             #desactivate autograd
             with torch.set_grad_enabled(False):
-                for chunk, mask, label in tqdm(valid_dataloader):
+                for chunk, mask, label in tqdm(valid_dataloader, miniters=max(1, len(valid_dataloader) // 100)):
 
                     functional.reset_net(model)
                     functional.set_step_mode(model, config['data']['step_mode'])

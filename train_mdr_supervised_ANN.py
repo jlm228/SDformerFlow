@@ -197,8 +197,7 @@ def train(args, config_parser):
         train_loss = 0.
 
 
-        for data in tqdm(train_dataloader):
-            torch.autograd.set_detect_anomaly(True)
+        for data in tqdm(train_dataloader, miniters=max(1, len(train_dataloader) // 100)):
             chunk = data['d_event_volume_new'].to(device=device, dtype=torch.float32)
             if config["data"]["num_chunks"] == 2:
                 chunk_old = data['d_event_volume_old'].to(device=device, dtype=torch.float32)
@@ -244,7 +243,7 @@ def train(args, config_parser):
                     curr_loss = loss_function(pred_list["flow"], label, mask, gamma = config["loss"]["gamma"])/num_acc_steps
 
                 if np.isnan(curr_loss.item()):
-                    raise
+                    raise RuntimeError("NaN loss in forward pass")
 
             if scaler is not None:
                 scaler.scale(curr_loss).backward()
@@ -323,8 +322,7 @@ def train(args, config_parser):
 
             #desactivate autograd
             with torch.set_grad_enabled(False):
-                for data in tqdm(valid_dataloader):
-                    torch.autograd.set_detect_anomaly(True)
+                for data in tqdm(valid_dataloader, miniters=max(1, len(valid_dataloader) // 100)):
                     chunk = data['event_volume_new'].to(device=device, dtype=torch.float32)
                     if config["data"]["num_chunks"] == 2:
                         chunk_old = data['event_volume_old'].to(device=device, dtype=torch.float32)

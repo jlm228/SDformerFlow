@@ -155,7 +155,7 @@ def valid_test(args, config_parser):
 
 
 
-    for chunk, mask, label in tqdm(valid_dataloader):
+    for chunk, mask, label in tqdm(valid_dataloader, miniters=max(1, len(valid_dataloader) // 100)):
 
         functional.reset_net(model)
 
