@@ -127,7 +127,16 @@ def valid_test(args, config_parser):
 
 
     # Validation Dataset
-    model.eval()
+    # BatchNorm statistics: the SNN's spike_norm layers are trained at batch_size 1, and the
+    # training script validates in train() mode at that batch size
+    # (train_flow_parallel_supervised_SNN.py:398-401), normalising each sample by its own
+    # statistics rather than by the accumulated running estimates. Match that convention so the
+    # metrics here mean the same thing as the valid_loss logged during training. The ANN trains
+    # at batch_size 8 and takes the eval() branch in both places.
+    if spiking_cfg is not None and config["loader"]["batch_size"] == 1:
+        model.train()
+    else:
+        model.eval()
 
     print('Validating... (test sequence)')
     sample = 0
