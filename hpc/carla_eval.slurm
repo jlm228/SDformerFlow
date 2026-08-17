@@ -1,11 +1,16 @@
 #!/bin/bash
 # Run a trained SDformerFlow / STTFlowNet over a CARLA capture: convert, predict, render, score.
 #
-#   sbatch hpc/carla_eval.slurm snn <capture_dir> $(cat hpc/logs/snn_runid.txt)
-#   sbatch hpc/carla_eval.slurm ann <capture_dir> $(cat hpc/logs/ann_runid.txt)
+#   CAP=../CARLA-hpc-scripts/captures/50761933
+#   sbatch hpc/carla_eval.slurm snn "${CAP}" $(cat hpc/logs/snn_runid.txt)
+#   sbatch hpc/carla_eval.slurm ann "${CAP}" $(cat hpc/logs/ann_runid.txt)
 #
 # <capture_dir> is a capture_dataset.py recording (events.npy, flow_gt/, depth_gt/, seg/,
-# windows.csv, meta.json) -- e.g. $BB_DATA/CARLA/50761933.
+# windows.csv, meta.json). capture.slurm writes them to captures/${SLURM_JOB_ID} under the
+# CARLA-hpc-scripts checkout, so the directory name is the capture job's id.
+#
+# Conversion writes ~1.1 GB of voxel tensors into <capture_dir>/saved_flow_data, so the capture
+# needs to be somewhere with room -- /rds, not /home.
 #
 # MODEL, CAPTURE and RUNID are POSITIONAL for the same reason evaluate.slurm's are: this
 # cluster's sbatch does not honour an in-script `#SBATCH --export=ALL`, so environment
@@ -77,10 +82,11 @@ fi
 echo
 
 # 2. Representation checks -- cheap, and catch a stale conversion before the GPU work starts.
+DATA_ROOT="${DATA_ROOT:-data/Datasets/DSEC}"
 python carla_eval/test_representation_match.py \
     --carla-tensors "${TENSORS}" --id "${CAPTURE_ID}" \
-    --dsec-root "${BB_DATA:-data/Datasets/DSEC}/saved_flow_data" \
-    --dsec-raw "${BB_DATA:-data/Datasets/DSEC}"
+    --dsec-root "${DATA_ROOT}/saved_flow_data" \
+    --dsec-raw "${DATA_ROOT}"
 echo
 
 # 3. Predict.
@@ -96,9 +102,14 @@ python carla_eval/predict_carla.py \
 echo
 
 # 4. Score, under the same masks and metrics as every other model.
-PRIOR="${CARLA_SCRIPTS_ROOT}/../OF_EV_SNN/results/carla_eval/dsec_validity_prior.npy"
-PRIOR_ARG=""
-[ -f "${PRIOR}" ] && PRIOR_ARG="--prior ${PRIOR}"
+# The prior defines the dsec_matched mask, which is the one the gate reads. Without it the run
+# still produces metrics, just not the ones that matter -- so fail here rather than an hour of
+# GPU time later.
+PRIOR="${PRIOR:-${CARLA_SCRIPTS_ROOT}/../OF_EV_SNN/results/carla_eval/dsec_validity_prior.npy}"
+[ -f "${PRIOR}" ] || {
+  echo "ERROR: DSEC validity prior not found at ${PRIOR}."
+  echo "       Build it with OF_EV_SNN/build_dsec_validity_prior.py, or set PRIOR=<path>."
+  exit 1; }
 
 python "${CARLA_SCRIPTS_ROOT}/score_flow.py" \
     --tensors "${TENSORS}" \
@@ -106,7 +117,7 @@ python "${CARLA_SCRIPTS_ROOT}/score_flow.py" \
     --name "${MODEL}_$(basename "${CAPTURE}")" \
     --capture "${CAPTURE}" \
     --outdir "${OUT}" \
-    ${PRIOR_ARG}
+    --prior "${PRIOR}"
 
 echo
 echo "Done. Feed the metrics CSV to the gate:"

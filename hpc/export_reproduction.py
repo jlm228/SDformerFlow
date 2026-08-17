@@ -94,8 +94,13 @@ def main():
             "Run hpc/evaluate.slurm first." % (ann_runid, snn_runid, args.results_dir))
 
     if not os.path.isfile(args.out):
-        raise SystemExit("%s not found. It is version-controlled in OF_EV_SNN; check the path."
-                         % args.out)
+        raise SystemExit(
+            "%s not found.\n"
+            "This script updates an existing record rather than creating one, because it only\n"
+            "knows about %d of the rows -- the rest (OF_EV_SNN, the published targets) would be\n"
+            "lost if it wrote the file from scratch. Either commit the CSV in the OF_EV_SNN\n"
+            "checkout and pull it here, or pass --out <path to an existing copy>."
+            % (args.out, len(OWNED)))
 
     with open(args.out, newline="") as f:
         rows = list(csv.DictReader(f))
