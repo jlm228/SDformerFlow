@@ -9,6 +9,7 @@ from models.STSwinNet.STSwinNet import STTFlowNet, STTFlowNet_4en
 from tqdm import tqdm
 from utils.mlflow import log_config, log_results
 from utils.utils import load_model,  create_model_dir,save_csv, save_model, count_parameters,print_parameters
+from utils.input_prep import prepare_chunk, forward_model
 from utils.visualization import Visualization_DSEC
 from DSEC_dataloader.DSEC_dataset_lite import DSECDatasetLite
 from DSEC_dataloader.data_augmentation import downsample_data,Compose,CenterCrop,RandomCrop,RandomRotationFlip,Random_event_drop
@@ -178,73 +179,22 @@ def valid_test(args, config_parser):
         if transform_valid is not None:
             chunk, label, mask = transform_valid((chunk, label, mask.float()))
         with torch.no_grad():
-            # forward pass
-            if config['model']['encoding'] == 'cnt':
-                if config["vis"]["enabled"] or config['vis']['store_att']:
+            # Visualisation tensors are built from the pre-transform chunk. They are only ever
+            # read under these flags, which every shipped eval config leaves off.
+            if config["vis"]["enabled"] or config['vis']['store_att']:
+                if config['model']['encoding'] == 'cnt':
                     chunk_vis = torch.sum(chunk, dim=1).detach()
-                if config["swin_transformer"]["use_arc"][1] =="PatchEmbed3D":  #B D,P,H,W  -B P D H W
-                    chunk = torch.transpose(chunk, 1, 2)
-                else:
-                    if config['loader']['polarity']:
-                        chunk = chunk.view([chunk.shape[0], -1] + list(chunk.shape[3:]))#for EV-FlowNet  #[B,40,H,W] 2+2+2....
-
-
-
-            elif config['model']['encoding'] == 'voxel': #B, C, P, H, W
-                # SNN: polarity is split into its own dimension when loader.polarity is set.
-                # ANN: split when loader.polarity is NOT set (see the else branch below).
-                if spiking_cfg is not None:
-                    if config['loader']['polarity']:
-                        neg = torch.nn.functional.relu(-chunk)
-                        pos = torch.nn.functional.relu(chunk)
-                        chunk = torch.cat((torch.unsqueeze(pos, dim=2), torch.unsqueeze(neg, dim=2)),
-                                          dim=2)  # B,C=20,P=2,H,W   B C, P, H, W
-                        if config["vis"]["enabled"]:
-                            chunk_vis = torch.stack((torch.sum(pos, dim=1), torch.sum(neg, dim=1)), dim=1)
+                elif config['model']['encoding'] == 'voxel':
+                    if spiking_cfg is not None and not config['loader']['polarity']:
+                        chunk_vis = torch.sum(chunk, dim=1).detach()
                     else:
-                        if config["vis"]["enabled"]:
-                            chunk_vis = torch.sum(chunk, dim=1).detach()
-                else:
-                    neg = torch.nn.functional.relu(-chunk)
-                    pos = torch.nn.functional.relu(chunk)
-                    if not config['loader']['polarity']:
-                        chunk = torch.cat((torch.unsqueeze(pos, dim=2), torch.unsqueeze(neg, dim=2)), dim=2)
-                    if config["vis"]["enabled"]:
-                        chunk_vis = torch.stack((torch.sum(pos, dim=1), torch.sum(neg, dim=1)), dim=1)
+                        chunk_vis = torch.stack((torch.sum(torch.nn.functional.relu(chunk), dim=1),
+                                                 torch.sum(torch.nn.functional.relu(-chunk), dim=1)),
+                                                dim=1)
 
-
-            else:
-                print("Config error: Event encoding not support.")
-                raise AttributeError
-
-            # SNN only: the ANN trains and evaluates on raw, unnormalized voxel values.
-            if spiking_cfg is not None:
-                if config["model"]["norm_input"]== "minmax":
-                    min, max = (
-                        torch.min(chunk[chunk != 0]),
-                        torch.max(chunk[chunk != 0]),
-                    )
-                    if not min == max:
-                        chunk[chunk != 0] = (chunk[chunk != 0] - min) / (max-min)
-                elif config["model"]["norm_input"]== "std":
-                    mean, stddev = (
-                        chunk[chunk != 0].mean(),
-                        chunk[chunk != 0].std(),
-                    )
-                    if stddev > 0:
-                        chunk[chunk != 0] = (chunk[chunk != 0] - mean) / stddev
-
-            # spike input
-            if config['data']['spike_th'] is not None:
-                chunk[chunk > config['data']['spike_th']] = 1
-                chunk[chunk < config['data']['spike_th']] = 0
-
-            # SpikingformerFlowNet.forward(x); STTFlowNet.forward(event_voxel, event_cnt).
-            if spiking_cfg is not None:
-                pred_list = model(chunk.to(device))
-            else:
-                pred_list = model(chunk.to(device), None)
-            pred = pred_list["flow"][-1]
+            # Shared with the CARLA evaluation -- see utils/input_prep.py for why.
+            chunk = prepare_chunk(chunk, config, spiking_cfg is not None)
+            pred = forward_model(model, chunk.to(device), spiking_cfg is not None)
 
             # print(f'spike_seq_monitor.records=\n{spike_seq_monitor.records}')
             if config["vis"]["monitor_fr"]:
