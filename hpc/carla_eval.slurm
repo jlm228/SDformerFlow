@@ -72,12 +72,24 @@ echo "model=${MODEL} | config=${CONFIG} | runid=${RUNID}"
 echo "capture=${CAPTURE} | id=${CAPTURE_ID}"
 echo
 
-# 1. Convert. Both models read the same 10-bin voxel tensors, so skip if already present and
-#    the ann and snn jobs neither race nor duplicate the work.
-if [ -d "${TENSORS}/event_tensors" ]; then
-  echo "tensors already present at ${TENSORS} -- skipping conversion"
-else
-  python carla_eval/carla_to_voxel.py "${CAPTURE}" --out "${TENSORS}" --capture-id "${CAPTURE_ID}"
+# 1. Convert. Both models read the same 10-bin voxel tensors, so the second job to arrive
+#    should reuse them rather than redo the work -- but only once the first has FINISHED.
+#
+DONE_MARK="${TENSORS}/sequence_lists/${CAPTURE_ID}_split_seq.csv"
+mkdir -p "$(dirname "${TENSORS}")"
+(
+  flock 9
+  if [ -f "${DONE_MARK}" ]; then
+    echo "tensors already complete at ${TENSORS} -- skipping conversion"
+  else
+    echo "converting (no ${DONE_MARK})"
+    python carla_eval/carla_to_voxel.py "${CAPTURE}" --out "${TENSORS}" --capture-id "${CAPTURE_ID}"
+  fi
+) 9>"${TENSORS}.lock"
+
+if [ ! -f "${DONE_MARK}" ]; then
+  echo "conversion did not produce ${DONE_MARK}" >&2
+  exit 1
 fi
 echo
 
