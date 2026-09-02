@@ -5,7 +5,7 @@
     forward(x) -> Tensor   # (B, 2, H, W), pixels per window
     reset_state() -> None
 
-One adapter serves both models -- they differ only in configuration, and those differences are
+One adapter serves both models. They differ only in configuration, and those differences are
 handled by utils/input_prep.py. These models are stateful, so reset_state must be called
 between samples or results depend on evaluation order.
 """
@@ -23,7 +23,8 @@ from models.STSwinNet.STSwinNet import STTFlowNet, STTFlowNet_4en  # noqa: E402
 from models.STSwinNet_SNN.Spiking_STSwinNet import (  # noqa: E402
     MS_SpikingformerFlowNet, MS_SpikingformerFlowNet_en4, SpikingformerFlowNet)
 from models.STSwinNet_SNN.Spiking_submodules import *  # noqa: E402,F401,F403
-from utils.input_prep import forward_model, prepare_chunk  # noqa: E402
+from utils.input_prep import (forward_model, nonzero_support,  # noqa: E402
+                              prepare_chunk, prepare_chunk_differentiable)
 from utils.utils import load_model, print_parameters  # noqa: E402
 
 from carla_eval.carla_to_voxel import events_to_voxel  # noqa: E402
@@ -132,6 +133,47 @@ class SwinFlowAdapter:
             x = self.prepare(x)
         with torch.no_grad():
             return forward_model(self.net, x.to(self.device), self.spiking)
+
+    def support(self, clean_chunk: torch.Tensor):
+        """The minmax normalisation set, taken from the CLEAN chunk. See nonzero_support.
+
+        None for the ANN, which does not normalise, so the caller can pass it through
+        unconditionally.
+        """
+        if not self.spiking:
+            return None
+        return nonzero_support(clean_chunk.to(device=self.device, dtype=torch.float32),
+                               self.config, self.spiking)
+
+    def prepare_grad(self, chunk: torch.Tensor, nz=None) -> torch.Tensor:
+        """`prepare` without in-place writes, so autograd reaches the input."""
+        return prepare_chunk_differentiable(
+            chunk.to(device=self.device, dtype=torch.float32), self.config, self.spiking, nz=nz)
+
+    def forward_grad(self, x: torch.Tensor, nz=None, prepared: bool = False) -> torch.Tensor:
+        """The same forward with gradients enabled, for white-box attacks.
+
+        Three differences from `forward`, all deliberate:
+
+        * no `torch.no_grad()`, so d(flow)/d(input) exists;
+        * the input transform is the out-of-place `prepare_chunk_differentiable`, pinned
+          against `prepare_chunk` by test_prepare_chunk_equivalence.py;
+        * state is reset HERE. `forward` leaves that to the evaluation loop, but an attack
+          calls this tens of times on one window and every call must start from the same
+          state, or the gradient is taken through a network that has been drifting since
+          iteration zero.
+
+        `nz` should come from `support(clean_chunk)` and stay fixed for the whole
+        optimisation, or the perturbation can rescale the sample through the normalisation.
+
+        BatchNorm mode is NOT touched: the SNN is left in train() at batch size 1, normalising
+        each sample by its own statistics, exactly as the clean evaluation does. Attacking a
+        differently-configured network than the one being scored would invalidate the result.
+        """
+        self.reset_state()
+        if not prepared:
+            x = self.prepare_grad(x, nz=nz)
+        return forward_model(self.net, x.to(self.device), self.spiking)
 
     def reset_state(self) -> None:
         functional.reset_net(self.net)
