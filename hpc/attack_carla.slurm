@@ -93,12 +93,14 @@ python carla_eval/attack_carla.py \
 
 echo
 echo "=== round trip: does the dumped .npy carry the div the objective reported? ==="
+RT_FAIL=0
 for REPORT in "${OUT}/reports/"*_"${LABEL}"_eps*.json; do
     python carla_eval/attack_carla.py --model "${MODEL}" --runid "${RUNID}" \
         --tensors "${TENSORS}" --capture "${CAPTURE}" --id "${CAPTURE_ID}" \
         --objective "${OBJECTIVE}" --epsilons 0 --clean-pred "${CLEAN}" --out "${OUT}" \
-        --round-trip "${REPORT}"
+        --round-trip "${REPORT}" || RT_FAIL=1
 done
+[ "${RT_FAIL}" = "0" ] || { echo "round trip FAILED on at least one epsilon" >&2; exit 1; }
 
 echo
 echo "Done: ${MODEL} / ${LABEL}."

@@ -117,8 +117,10 @@ def main():
     ap.add_argument("--id", required=True, help="capture id / split-list prefix")
     ap.add_argument("--objective", required=True,
                     choices=["random_sign", "epe_global", "epe_masked", "div"])
-    ap.add_argument("--sign", default="suppress", choices=["suppress", "inflate"],
-                    help="div only: suppress reads tau LONG, inflate reads it SHORT")
+    ap.add_argument("--sign", default="suppress", choices=["suppress", "inflate", "none"],
+                    help="div only: suppress reads tau LONG, inflate reads it SHORT. 'none' is "
+                         "the placeholder the sweep manifest carries for objectives that have "
+                         "no direction, and is ignored unless --objective is div")
     ap.add_argument("--attack", default="pgd", choices=["fgsm", "pgd"])
     ap.add_argument("--epsilons", type=float, nargs="+", required=True)
     ap.add_argument("--iters", type=int, default=10)
@@ -141,6 +143,11 @@ def main():
     ap.add_argument("--carla-scripts", default=None)
     ap.add_argument("--round-trip", default=None, metavar="REPORT_JSON")
     args = ap.parse_args()
+
+    # The manifest carries "none" for objectives with no direction; the objective builder
+    # only accepts a real sign, and ignores it for everything but div.
+    if args.sign == "none":
+        args.sign = "suppress"
 
     _core, band_mod, runner = import_attack_core(args.carla_scripts)
 
@@ -195,6 +202,15 @@ def main():
         nz = model.support(x_clean)
         return lambda x: model.forward_grad(x, nz=nz)
 
+    def forward_eval(x):
+        """Prediction with state reset first.
+
+        `SwinFlowAdapter.forward` leaves the reset to its caller; every window must start from
+        a clean membrane state or the prediction depends on evaluation order.
+        """
+        model.reset_state()
+        return model.forward(x)
+
     g = torch.Generator(device="cpu")
 
     def random_sign_fn(x, eps, seed):
@@ -209,7 +225,7 @@ def main():
 
     reports, _dirs = runner.run_sweep(
         band=(lo, hi), load_window=load_window,
-        forward_grad_factory=forward_grad_factory, forward_eval=model.forward,
+        forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
         epe_fn=mod_loss_function,
         objective=args.objective, sign=args.sign, attack=args.attack,
         epsilons=args.epsilons, iters=args.iters, alpha=args.alpha, seed=args.seed,
