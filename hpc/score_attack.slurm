@@ -33,7 +33,11 @@ CARLA_SCRIPTS_ROOT="${CARLA_SCRIPTS_ROOT:-../CARLA-hpc-scripts}"
 CAP_ABS="$(cd "${CAPTURE}" && pwd)"
 SCEN="$(basename "${CAP_ABS}")"
 CAPTURE_ID="carla_${SCEN}"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# Prefer the prefix the dumps actually carry, in case the capture was converted under
+# another one; run_case would otherwise assume "carla_<basename>".
+_PROBE="$(find "$(pwd)/results/carla_eval/pred" -name "*_[0-9][0-9][0-9][0-9].npy" 2>/dev/null | head -1)"
+[ -n "${_PROBE}" ] && CAPTURE_ID="$(basename "${_PROBE}" .npy | sed "s/_[0-9]\{4\}$//")"
+REPO="$(pwd)"   # already cd'd to SLURM_SUBMIT_DIR; $0 is Slurm's spooled copy
 
 cd "${CARLA_SCRIPTS_ROOT}"
 RES="results/attack-${SCEN}"
