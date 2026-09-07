@@ -46,13 +46,12 @@ done
 # means the same perturbation on each -- which is what makes the SNN/ANN pair a controlled
 # ablation rather than a comparison at two different budgets. The values differ from
 # OF_EV_SNN's: this representation is signed and runs [-14.20, 10.89] at 10.24% occupancy.
-# The ramp reaches below the smallest budget FGSM tested, because div_inflate already
-# degraded the ANN at 0.005 -- the bottom of the old ramp -- so its threshold is unknown
-# and sits somewhere underneath it. PGD is stronger again, which moves every threshold
-# further down.
+# Overridden by EPSILONS; these are a fallback, not a calibration.
 EPSILONS="${EPSILONS:-0.0 0.00125 0.0025 0.005 0.01 0.02 0.05 0.1}"
 ITERS="${ITERS:-10}"
 ATTACK="${ATTACK:-pgd}"
+# FGSM is one step by construction; the report records whatever the manifest says.
+[ "${ATTACK}" = "fgsm" ] && ITERS=1
 if [ "${SMOKE:-0}" != "0" ]; then
     EPSILONS="0.0 0.02"
     ITERS=4
@@ -68,9 +67,7 @@ fi
 EPS_HUGE="$(python -c "import sys; print('%g' % (${EPS_HIGH_MULT:-2} * max(float(v) for v in sys.argv[1:])))" ${EPSILONS})"
 SWEEP_EPS="${EPSILONS} ${EPS_HUGE}"
 
-# PGD runs one forward and backward per iteration where FGSM runs one, so a limit sized for
-# FGSM will wall-clock out. Override with TIME rather than editing the slurm header, so one
-# submission can be given more without changing what the next one inherits.
+# Per-submission override of the slurm header's --time.
 TIME="${TIME:-}"
 SB_TIME=""
 if [ -n "${TIME}" ]; then SB_TIME="--time=${TIME}"; fi
@@ -85,11 +82,8 @@ for M in snn ann; do
     echo "${M} ${RUNID} epe_masked   none      ${ATTACK} ${ITERS} ${SWEEP_EPS}"
     echo "${M} ${RUNID} div          suppress  ${ATTACK} ${ITERS} ${SWEEP_EPS}"
     echo "${M} ${RUNID} div          inflate   ${ATTACK} ${ITERS} ${SWEEP_EPS}"
-    # FGSM against the same objectives, for the one-step-beats-iterative comparison. Both
-    # signs of div, because which sign a model is vulnerable to differs by model and the
-    # comparison has to be run against the sign that actually bites. Skipped when ATTACK is
-    # already fgsm, or these rows would duplicate the ones above and two array tasks would
-    # write the same output directory.
+    # FGSM rows for the one-step-vs-iterative comparison, both signs. Skipped when
+    # ATTACK is already fgsm, which would duplicate the rows above.
     if [ "${ATTACK}" != "fgsm" ]; then
       echo "${M} ${RUNID} div          suppress  fgsm 1 ${SWEEP_EPS}"
       echo "${M} ${RUNID} div          inflate   fgsm 1 ${SWEEP_EPS}"
