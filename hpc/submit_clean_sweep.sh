@@ -3,9 +3,10 @@
 #
 #   bash hpc/submit_clean_sweep.sh <capture_dir> [<capture_dir> ...]
 #
-# Run ids from hpc/logs/{snn,ann}_runid.txt. Predictions land in
+# The eval job builds the capture's voxel tensors if they are missing, so raw captures are
+# fine. Run ids from hpc/logs/{snn,ann}_runid.txt. Predictions land in
 # results/carla_eval/pred/{snn,ann} as <capture_id>_<window>.npy.
-# Captures with no saved_flow_data/, or already predicted, are skipped; RERUN=1 overrides.
+# Captures with no events.npy, or already predicted, are skipped; RERUN=1 overrides.
 
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,8 +24,8 @@ SKIPPED=0
 
 for CAPTURE in "$@"; do
   SCEN="$(basename "${CAPTURE}")"
-  if [ ! -d "${CAPTURE}/saved_flow_data" ]; then
-    echo "SKIP ${SCEN}: no saved_flow_data/"
+  if [ ! -f "${CAPTURE}/events.npy" ]; then
+    echo "SKIP ${SCEN}: no events.npy"
     SKIPPED=$((SKIPPED + 2))
     continue
   fi
