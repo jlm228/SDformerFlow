@@ -61,6 +61,14 @@ LABEL="${OBJECTIVE}"
 # and FGSM, which would otherwise write the same output files.
 LABEL="${LABEL}_${ATTACK}"
 
+# RAND_INIT=0 starts PGD at the clean input. Separates a bad random start from a bad
+# gradient when PGD underperforms FGSM.
+NRI=""
+if [ "${RAND_INIT:-1}" = "0" ]; then
+  NRI="--no-rand-init"
+  LABEL="${LABEL}_nri"
+fi
+
 [ -d "${TENSORS}" ] || {
   echo "no ${TENSORS} -- run hpc/carla_eval.slurm ${MODEL} ${CAPTURE} <runid> first" >&2
   exit 1; }
@@ -87,7 +95,7 @@ python carla_eval/attack_carla.py \
     --objective "${OBJECTIVE}" \
     --sign "${SIGN}" \
     --attack "${ATTACK}" \
-    --iters "${ITERS}" \
+    --iters "${ITERS}" ${NRI} \
     --epsilons ${EPSILONS} \
     --clean-pred "${CLEAN}" \
     --out "${OUT}" \

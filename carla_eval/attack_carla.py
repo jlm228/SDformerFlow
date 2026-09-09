@@ -125,6 +125,8 @@ def main():
     ap.add_argument("--epsilons", type=float, nargs="+", required=True)
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--alpha", type=float, default=None, help="default: epsilon / 4")
+    ap.add_argument("--no-rand-init", action="store_true",
+                    help="start PGD at the clean input, not a random point in the ball")
     ap.add_argument("--seed", type=int, default=2305)
     ap.add_argument("--support", default="all", choices=["all", "nonzero"],
                     help="nonzero restricts the perturbation to cells that already carry "
@@ -234,7 +236,8 @@ def main():
         # The voxel is SIGNED -- a negative cell is an OFF event, not an invalid count -- so
         # unlike OF_EV_SNN's count tensor there is no non-negativity clamp here.
         clip_min=None, clip_max=None, support_mode=args.support,
-        dump_adv_tensors=args.dump_adv_tensors, random_sign_fn=random_sign_fn)
+        dump_adv_tensors=args.dump_adv_tensors,
+                        rand_init=not args.no_rand_init, random_sign_fn=random_sign_fn)
 
     paths = runner.write_reports(reports, args.report or os.path.join(args.out, "reports"),
                                  reports[args.epsilons[0]]["label"])
