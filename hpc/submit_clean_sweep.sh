@@ -19,6 +19,11 @@ ANN_RUNID="${ANN_RUNID:-$(cat hpc/logs/ann_runid.txt 2>/dev/null || true)}"
 [ -n "${SNN_RUNID}" ] || { echo "ERROR: no SNN run id (hpc/logs/snn_runid.txt)" >&2; exit 1; }
 [ -n "${ANN_RUNID}" ] || { echo "ERROR: no ANN run id (hpc/logs/ann_runid.txt)" >&2; exit 1; }
 
+# DEPEND=<jobid> holds every job until that one finishes, so a clean
+# sweep can be queued behind an attack array without competing for GPUs.
+SB_DEP=""
+if [ -n "${DEPEND:-}" ]; then SB_DEP="--dependency=afterany:${DEPEND}"; fi
+
 SUBMITTED=0
 SKIPPED=0
 
@@ -41,7 +46,7 @@ for CAPTURE in "$@"; do
       SKIPPED=$((SKIPPED + 1))
       continue
     fi
-    JOB=$(sbatch --parsable hpc/carla_eval.slurm "${M}" "${CAPTURE}" "${RUNID}")
+    JOB=$(sbatch --parsable ${SB_DEP} hpc/carla_eval.slurm "${M}" "${CAPTURE}" "${RUNID}")
     echo "submitted ${SCEN} ${M}  (${CAPTURE_ID})  job ${JOB}"
     SUBMITTED=$((SUBMITTED + 1))
   done
