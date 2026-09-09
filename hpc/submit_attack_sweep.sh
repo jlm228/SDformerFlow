@@ -58,6 +58,7 @@ if [ "${KEEP_PREVIOUS:-0}" = "0" ]; then
   done
 fi
 
+RAND_INIT="${RAND_INIT:-1}"
 ITERS="${ITERS:-10}"
 ATTACK="${ATTACK:-pgd}"
 # FGSM is one step by construction; the report records whatever the manifest says.
@@ -109,9 +110,12 @@ echo
 # The transfer check needs the perturbed INPUT tensors, not just the predictions. They are
 # byte-identical between these two models, so an ANN-derived perturbation feeds the SNN with no
 # re-encoding -- that is Stage 6 check 2, and it is only defined within this pair.
-export DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS:-results/attack/adv_tensors}"
+# The perturbed INPUT tensors, needed only for the ANN -> SNN transfer check. ~12 MB a
+# window, so this is opt-in: set DUMP_ADV_TENSORS to a path to turn it on.
+DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS:-}"
 
 ARRAY_ID=$(sbatch --parsable --array=1-"${N}" ${SB_TIME} \
+    --export=ALL,RAND_INIT="${RAND_INIT}",DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS}" \
     hpc/attack_carla.slurm "${CAPTURE}" "${MANIFEST}")
 echo "attack array : job ${ARRAY_ID} (1-${N})"
 
