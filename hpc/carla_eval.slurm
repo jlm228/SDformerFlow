@@ -131,6 +131,18 @@ python "${CARLA_SCRIPTS_ROOT}/score_flow.py" \
     --outdir "${OUT}" \
     --prior "${PRIOR}"
 
+# The voxel tensors are derived data and both models read the same ones, so only the second
+# job to finish may remove them. 
+if [ "${KEEP_TENSORS:-0}" != "1" ]; then
+    OTHER="ann"; [ "${MODEL}" = "ann" ] && OTHER="snn"
+    if [ -n "$(find "results/carla_eval/pred/${OTHER}" -name "${CAPTURE_ID}_*.npy"                     2>/dev/null | head -1)" ]; then
+        echo "both models predicted ${CAPTURE_ID} -- removing ${TENSORS}"
+        rm -rf "${TENSORS}"
+    else
+        echo "${OTHER} has not predicted ${CAPTURE_ID} yet -- keeping ${TENSORS}"
+    fi
+fi
+
 echo
 echo "Done. Feed the metrics CSV to the gate:"
 echo "  python stage2_gate.py   # in the OF_EV_SNN checkout"
