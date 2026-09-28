@@ -375,9 +375,12 @@ def main():
             print("preflight on window %d, input %s" % (w, tuple(x.shape)))
             # forward_grad, not forward_eval: the latter is wrapped in no_grad, so the
             # forward+backward timing -- the number that sets EPS_CHUNK -- would be skipped.
+            # base="atan": this SNN's native family. A is scale-free there, so no bracket is
+            # derived -- E|u| is reported only for the M0 = 1 bias.
             preflight.report(model.net, model.forward_grad, x,
                              loss_fn=lambda f: (f ** 2).mean(),
                              native_alpha=2.0 if model.spiking else None,
+                             base="atan" if model.spiking else None,
                              skip=SKIP_MODULES, device=str(device))
         finally:
             if handle is not None:
