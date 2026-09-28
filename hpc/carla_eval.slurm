@@ -19,7 +19,7 @@
 # The SNN uses valid_DSEC_supervised_full.yml, not the cropped config: every model must be
 # scored over the same pixels, so compare against the reproduced full-resolution number.
 #
-# Scoring runs out of CARLA-hpc-scripts/score_flow.py rather than in-process, so models in
+# Scoring runs out of CARLA-hpc-scripts/flow/score_flow.py rather than in-process, so models in
 # environments that cannot be shared still go through one metric implementation. Point
 # $CARLA_SCRIPTS_ROOT at that checkout.
 
@@ -56,8 +56,8 @@ esac
 
 [ -f "${CONFIG}" ] || { echo "ERROR: ${CONFIG} not found."; exit 1; }
 [ -d "${CAPTURE}" ] || { echo "ERROR: capture dir ${CAPTURE} not found."; exit 1; }
-[ -f "${CARLA_SCRIPTS_ROOT}/score_flow.py" ] || {
-  echo "ERROR: ${CARLA_SCRIPTS_ROOT}/score_flow.py not found."
+[ -f "${CARLA_SCRIPTS_ROOT}/flow/score_flow.py" ] || {
+  echo "ERROR: ${CARLA_SCRIPTS_ROOT}/flow/score_flow.py not found."
   echo "       Set CARLA_SCRIPTS_ROOT to your CARLA-hpc-scripts checkout."; exit 1; }
 
 CAPTURE_ID="carla_$(basename "${CAPTURE}")"
@@ -123,7 +123,7 @@ PRIOR="${PRIOR:-${CARLA_SCRIPTS_ROOT}/../OF_EV_SNN/results/carla_eval/dsec_valid
   echo "       Build it with OF_EV_SNN/build_dsec_validity_prior.py, or set PRIOR=<path>."
   exit 1; }
 
-python "${CARLA_SCRIPTS_ROOT}/score_flow.py" \
+python "${CARLA_SCRIPTS_ROOT}/flow/score_flow.py" \
     --tensors "${TENSORS}" \
     --pred "${PRED}" \
     --name "${MODEL}_$(basename "${CAPTURE}")" \

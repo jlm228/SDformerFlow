@@ -55,7 +55,8 @@ def import_attack_core(path=None):
     sys.path.insert(0, root)
     import attack_core                                                   # noqa: E402
     from attack_core import band as band_mod, runner                     # noqa: E402
-    return attack_core, band_mod, runner
+    from attack_core import preflight, surrogates                     # noqa: E402
+    return attack_core, band_mod, runner, preflight, surrogates
 
 
 def mod_loss_function(pred, label, mask):
@@ -105,6 +106,34 @@ def build_capture_loader(config, capture_id, device):
     return load_window, len(files)
 
 
+def _surrogate_kwargs(args):
+    """Constructor arguments for the chosen surrogate."""
+    if args.surrogate in ("assg", "assgs"):
+        if args.assg_A is None:
+            raise SystemExit(
+                "--surrogate %s needs --assg-A. It is tuned per model and then frozen, so "
+                "there is no default." % args.surrogate)
+        return {"A": args.assg_A, "gamma": args.assg_gamma,
+                "beta1": args.assg_betas[0], "beta2": args.assg_betas[1]}
+    if args.surrogate == "pdsg":
+        return {"mode": args.pdsg_mode, "channel_dim": args.pdsg_channel_dim}
+    return {}
+
+
+def set_torch_backend(net):
+    """Force the torch backend on every spikingjelly module that offers one.
+
+    cupy kernels carry their own surrogate, so a swapped `surrogate_function` would be ignored
+    in the backward while the forward still worked -- a silent no-op.
+    """
+    changed = 0
+    for module in net.modules():
+        if getattr(module, "backend", None) not in (None, "torch"):
+            module.backend = "torch"
+            changed += 1
+    return changed
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -121,7 +150,31 @@ def main():
                     help="div only: suppress reads tau LONG, inflate reads it SHORT. 'none' is "
                          "the placeholder the sweep manifest carries for objectives that have "
                          "no direction, and is ignored unless --objective is div")
-    ap.add_argument("--attack", default="pgd", choices=["fgsm", "pgd"])
+    ap.add_argument("--attack", default="pgd", choices=["fgsm", "pgd", "sapgd"])
+    ap.add_argument("--surrogate", default="native",
+                    choices=["native", "pdsg", "assg", "assgs"],
+                    help="gradient substitute during the attack. assg is the Atan base, this "
+                         "SNN's own family (native ATan, alpha=2). Ignored for --model ann, "
+                         "which has no spiking neurons")
+    ap.add_argument("--assg-A", type=float, default=None,
+                    help="ASSG sharpness setting; tuned per model and then frozen, so it has "
+                         "no default. Required for assg/assgs")
+    ap.add_argument("--assg-gamma", type=float, default=1.5)
+    ap.add_argument("--assg-betas", type=float, nargs=2, default=(0.9, 0.9),
+                    metavar=("BETA1", "BETA2"))
+    ap.add_argument("--pdsg-mode", default="channel", choices=["channel", "layer"])
+    ap.add_argument("--pdsg-channel-dim", type=int, default=1)
+    ap.add_argument("--norm-set", default="floating", choices=["floating", "pinned"],
+                    help="floating re-normalises over the perturbed input on BOTH paths, so "
+                         "the function attacked is the one scored. pinned keeps the clean "
+                         "normalisation set, which is what the PGD dumps already on disk used")
+    ap.add_argument("--rhos", type=float, nargs="+", default=None,
+                    help="the rho each epsilon was calibrated from, recorded in the reports")
+    ap.add_argument("--scene-mass", type=float, default=None,
+                    help="events per window, so realised rho can be reported")
+    ap.add_argument("--preflight", action="store_true",
+                    help="measure swap coverage, mean |u| per spiking layer, timing and peak "
+                         "memory on one window, then exit without attacking")
     ap.add_argument("--epsilons", type=float, nargs="+", required=True)
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--alpha", type=float, default=None, help="default: epsilon / 4")
@@ -135,8 +188,8 @@ def main():
     ap.add_argument("--band-hi", type=int, default=None)
     ap.add_argument("--band-json", default=None,
                     help="default: <capture>/attack_band.json, from attack_core.band")
-    ap.add_argument("--clean-pred", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--clean-pred", default=None)
+    ap.add_argument("--out", default=None)
     ap.add_argument("--report", default=None, help="default: <out>/reports")
     ap.add_argument("--dump-adv-tensors", default=None,
                     help="also write the perturbed INPUT tensors. The SNN and ANN consume "
@@ -146,12 +199,19 @@ def main():
     ap.add_argument("--round-trip", default=None, metavar="REPORT_JSON")
     args = ap.parse_args()
 
+    # --preflight only loads the model and measures it; it writes no dumps, so it should not
+    # demand the paths a real run needs.
+    if not args.preflight:
+        for flag, value in (("--clean-pred", args.clean_pred), ("--out", args.out)):
+            if value is None:
+                ap.error("%s is required unless --preflight" % flag)
+
     # The manifest carries "none" for objectives with no direction; the objective builder
     # only accepts a real sign, and ignores it for everything but div.
     if args.sign == "none":
         args.sign = "suppress"
 
-    _core, band_mod, runner = import_attack_core(args.carla_scripts)
+    _core, band_mod, runner, preflight, surrogates = import_attack_core(args.carla_scripts)
 
     if args.round_trip:
         from attack_core.reference import round_trip
@@ -194,13 +254,17 @@ def main():
     model = SwinFlowAdapter(config, args.runid, device)
 
     def forward_grad_factory(x_clean):
-        """A forward whose minmax normalisation set is pinned to THIS window's clean tensor.
+        """The forward the attack differentiates, with its minmax normalisation set.
 
-        Without the pin, a perturbation that lifts one cell off zero joins the non-zero set,
-        moves lo/hi, and rescales every value in the sample (voxels the attack never touched).
-        Measured in test_prepare_chunk_equivalence.py: 1e-3 on one voxel moves untouched cells
-        by 7.9e-4 when the set floats, and by exactly 0 when it is pinned.
+        `floating` (the default) lets the set be recomputed from the perturbed input, exactly as
+        `prepare_chunk` does on the scored path, so one function is attacked and scored.
+        `pinned` fixes the set to this window's clean tensor: a perturbation that lifts a cell
+        off zero then cannot join the non-zero set, move lo/hi and rescale voxels it never
+        touched. test_prepare_chunk_equivalence.py measures that at 7.9e-4 on untouched cells
+        for 1e-3 on one voxel. The PGD dumps already on disk were made pinned.
         """
+        if args.norm_set == "floating":
+            return model.forward_grad
         nz = model.support(x_clean)
         return lambda x: model.forward_grad(x, nz=nz)
 
@@ -213,6 +277,42 @@ def main():
         model.reset_state()
         return model.forward(x)
 
+    # num_chunks 2 (the ANN) puts the PREVIOUS window in the first num_bins channels and the
+    # target window in the last, so consecutive samples share a window and the perturbation has
+    # to be carried. num_chunks 1 (the SNN) is one window per sample, so nothing is shared.
+    bin_layout = None
+    if config["data"]["num_chunks"] == 2:
+        nb = model.num_bins
+        bin_layout = runner.BinLayout(axis=1, own=slice(nb, 2 * nb),
+                                      inherit_from=slice(nb, 2 * nb), inherit_to=slice(0, nb))
+
+    handle = None
+    if model.spiking:
+        # cupy kernels embed their own surrogate, so the swap would not reach the backward.
+        set_torch_backend(model.net)
+        factory = surrogates.build_surrogate_factory(args.surrogate, **_surrogate_kwargs(args))
+        if factory is not None:
+            handle = surrogates.swap_surrogates(model.net, factory=factory)
+            cov = handle.coverage
+            print("surrogate %s on %d of %d spiking modules"
+                  % (args.surrogate, cov["n_swapped"], cov["n_candidates"]))
+    elif args.surrogate != "native":
+        raise SystemExit("--surrogate %s on an ANN: there are no spiking neurons to swap"
+                         % args.surrogate)
+
+    if args.preflight:
+        try:
+            first = load_window(lo)
+            if first is None:
+                raise SystemExit("window %d is not in this capture" % lo)
+            preflight.report(model.net, forward_eval, first[0],
+                             native_alpha=2.0 if model.spiking else None,
+                             device=str(device))
+        finally:
+            if handle is not None:
+                surrogates.restore_surrogates(handle)
+        raise SystemExit(0)
+
     g = torch.Generator(device="cpu")
 
     def random_sign_fn(x, eps, seed):
@@ -220,24 +320,34 @@ def main():
         sign = (torch.randint(0, 2, x.shape, generator=g, dtype=torch.float32) * 2 - 1)
         return x + eps * sign.to(x.device, x.dtype)
 
-    print("%s (%s) | objective %s%s | attack %s | band [%d, %d] of %d windows"
+    label = runner.attack_label(args.attack, args.surrogate)
+    print("%s (%s) | objective %s%s | attack %s | norm-set %s | band [%d, %d] of %d windows"
           % (MODEL_NAMES[args.model], args.model, args.objective,
-             "/" + args.sign if args.objective == "div" else "", args.attack, lo, hi, n_windows))
+             "/" + args.sign if args.objective == "div" else "", label, args.norm_set,
+             lo, hi, n_windows))
     print("epsilons: %s" % " ".join("%g" % e for e in args.epsilons))
 
-    reports, _dirs = runner.run_sweep(
-        band=(lo, hi), load_window=load_window,
-        forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
-        epe_fn=mod_loss_function,
-        objective=args.objective, sign=args.sign, attack=args.attack,
-        epsilons=args.epsilons, iters=args.iters, alpha=args.alpha, seed=args.seed,
-        clean_pred_dir=args.clean_pred, out_root=args.out, capture_id=args.id,
-        model_name=MODEL_NAMES[args.model],
-        # The voxel is SIGNED -- a negative cell is an OFF event, not an invalid count -- so
-        # unlike OF_EV_SNN's count tensor there is no non-negativity clamp here.
-        clip_min=None, clip_max=None, support_mode=args.support,
-        dump_adv_tensors=args.dump_adv_tensors,
-                        rand_init=not args.no_rand_init, random_sign_fn=random_sign_fn)
+    try:
+        reports, _dirs = runner.run_sweep(
+            band=(lo, hi), load_window=load_window,
+            forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
+            epe_fn=mod_loss_function,
+            objective=args.objective, sign=args.sign, attack=label,
+            epsilons=args.epsilons, iters=args.iters, alpha=args.alpha, seed=args.seed,
+            clean_pred_dir=args.clean_pred, out_root=args.out, capture_id=args.id,
+            model_name=MODEL_NAMES[args.model],
+            # The voxel is SIGNED -- a negative cell is an OFF event, not an invalid count --
+            # so unlike OF_EV_SNN's count tensor there is no non-negativity clamp here.
+            clip_min=None, clip_max=None, support_mode=args.support,
+            dump_adv_tensors=args.dump_adv_tensors,
+            bin_layout=bin_layout, surrogate_ctx=handle,
+            rhos=args.rhos, scene_mass=args.scene_mass,
+            rand_init=not args.no_rand_init, random_sign_fn=random_sign_fn)
+    finally:
+        # Must run even when the attack raises, or a failed window leaves the adaptive
+        # surrogate installed for whatever runs next in this process.
+        if handle is not None:
+            surrogates.restore_surrogates(handle)
 
     paths = runner.write_reports(reports, args.report or os.path.join(args.out, "reports"),
                                  reports[args.epsilons[0]]["label"])

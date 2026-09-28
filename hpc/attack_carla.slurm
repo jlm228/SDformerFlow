@@ -51,6 +51,27 @@ LINE="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${MANIFEST}")"
 [ -n "${LINE}" ] || { echo "manifest has no line ${SLURM_ARRAY_TASK_ID}" >&2; exit 1; }
 read -r MODEL RUNID OBJECTIVE SIGN ATTACK ITERS EPSILONS <<< "${LINE}"
 
+# The manifest's <attack> is "<optimiser>-<surrogate>" for everything new (sapgd-assg,
+# sapgd-native), and the bare "pgd"/"fgsm" for the runs already on disk. Split it here so the
+# manifest stays one column and the labels keep matching the dump directories.
+OPTIMISER="${ATTACK%%-*}"
+SURROGATE="${ATTACK#*-}"
+[ "${SURROGATE}" = "${ATTACK}" ] && SURROGATE="native"
+
+# The paper's setting for SA-PGD is N = 100; a manifest that leaves ITERS at the PGD default
+# would quietly run a tenth of the attack.
+if [ "${OPTIMISER}" = "sapgd" ] && [ "${ITERS}" -lt 100 ]; then
+  echo "warning: ${ATTACK} with --iters ${ITERS}; the published setting is 100" >&2
+fi
+
+# ASSG's A is tuned per model and frozen. Passed through the environment so the manifest
+# format does not change. --norm-set defaults to floating: both paths re-normalise over the
+# perturbed input, so the function attacked is the one scored.
+ASSG_ARGS=""
+case "${SURROGATE}" in
+  assg|assgs) ASSG_ARGS="--assg-A ${ASSG_A:?set ASSG_A for surrogate ${SURROGATE}}" ;;
+esac
+
 CAPTURE_ID="carla_$(basename "${CAPTURE}")"
 TENSORS="${CAPTURE}/saved_flow_data"
 CLEAN="results/carla_eval/pred/${MODEL}"
@@ -94,7 +115,9 @@ python carla_eval/attack_carla.py \
     --id "${CAPTURE_ID}" \
     --objective "${OBJECTIVE}" \
     --sign "${SIGN}" \
-    --attack "${ATTACK}" \
+    --attack "${OPTIMISER}" \
+    --surrogate "${SURROGATE}" ${ASSG_ARGS} \
+    --norm-set "${NORM_SET:-floating}" \
     --iters "${ITERS}" ${NRI} \
     --epsilons ${EPSILONS} \
     --clean-pred "${CLEAN}" \
