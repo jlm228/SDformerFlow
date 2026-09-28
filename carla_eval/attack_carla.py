@@ -134,6 +134,39 @@ def set_torch_backend(net):
     return changed
 
 
+def preflight_input(capture_dir, model, window):
+    """One model input for `window`, encoded from events.npy in memory.
+
+    The pre-flight runs before anything has been voxelised, and the pipeline deletes the voxels
+    once inference is done, so the saved_flow_data tensors cannot be relied on. events.npy is
+    the one artefact that is kept, and `input_from_events` is the same encoder the voxelised
+    path uses. num_chunks 2 (the ANN) needs the preceding window as well.
+    """
+    from groundtruth.inspect_capture import load_capture
+
+    events, windows, _meta = load_capture(capture_dir, mmap=True)
+    t_starts = windows["t_start_us"].to_numpy()
+    chunks = model.num_chunks
+    first = window - (chunks - 1)
+    if first < 0 or window >= len(t_starts):
+        raise SystemExit(
+            "--preflight-window %d is out of range: this model needs %d consecutive windows, "
+            "so it must be in [%d, %d]" % (window, chunks, chunks - 1, len(t_starts) - 1))
+    for w in range(first, window + 1):
+        if np.isnan(t_starts[w]):
+            raise SystemExit("window %d recorded no events; pick another "
+                             "--preflight-window" % w)
+
+    window_us = int(round(model.window_ms * 1000))
+    t0 = int(t_starts[first])
+    t1 = int(t_starts[window]) + window_us
+    if t1 - t0 != chunks * window_us:
+        raise SystemExit(
+            "windows %d..%d are not contiguous, so they cannot form this model's "
+            "%d-window input" % (first, window, chunks))
+    return model.input_from_events(events, t0, t1)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -172,6 +205,8 @@ def main():
                     help="the rho each epsilon was calibrated from, recorded in the reports")
     ap.add_argument("--scene-mass", type=float, default=None,
                     help="events per window, so realised rho can be reported")
+    ap.add_argument("--preflight-window", type=int, default=None,
+                    help="window to measure on; default: the band's first")
     ap.add_argument("--preflight", action="store_true",
                     help="measure swap coverage, mean |u| per spiking layer, timing and peak "
                          "memory on one window, then exit without attacking")
@@ -238,18 +273,28 @@ def main():
         raise SystemExit("loader.crop is %s. CARLA evaluation must run at full resolution."
                          % (config["loader"]["crop"],))
 
-    load_window, n_windows = build_capture_loader(config, args.id, device)
+    # The pre-flight encodes its own window from events.npy: the saved_flow_data
+    # tensors are written for inference and deleted afterwards, and the pre-flight is
+    # meant to run before any of that.
+    if args.preflight:
+        load_window, n_windows = None, 0
+    else:
+        load_window, n_windows = build_capture_loader(config, args.id, device)
 
     if args.band_lo is not None and args.band_hi is not None:
         lo, hi = args.band_lo, args.band_hi
     else:
         path = args.band_json or os.path.join(args.capture, "attack_band.json")
-        if not os.path.exists(path):
+        if os.path.exists(path):
+            lo, hi, _meta = band_mod.read(path)
+        elif args.preflight:
+            # Measuring needs a window, not the band.
+            lo, hi = max(config['data']['num_chunks'] - 1, 0), 0
+        else:
             raise SystemExit(
                 "no band at %s. Compute it once, in an environment with avoidance's "
                 "dependencies:\n  python -m attack_core.band --capture %s"
                 % (path, args.capture))
-        lo, hi, _meta = band_mod.read(path)
 
     model = SwinFlowAdapter(config, args.runid, device)
 
@@ -302,10 +347,14 @@ def main():
 
     if args.preflight:
         try:
-            first = load_window(lo)
-            if first is None:
-                raise SystemExit("window %d is not in this capture" % lo)
-            preflight.report(model.net, forward_eval, first[0],
+            w = (args.preflight_window if args.preflight_window is not None
+                 else max(lo, model.num_chunks - 1))
+            x = preflight_input(args.capture, model, w).to(device)
+            print("preflight on window %d, input %s" % (w, tuple(x.shape)))
+            # forward_grad, not forward_eval: the latter is wrapped in no_grad, so the
+            # forward+backward timing -- the number that sets EPS_CHUNK -- would be skipped.
+            preflight.report(model.net, model.forward_grad, x,
+                             loss_fn=lambda f: (f ** 2).mean(),
                              native_alpha=2.0 if model.spiking else None,
                              device=str(device))
         finally:
