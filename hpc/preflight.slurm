@@ -1,7 +1,7 @@
 #!/bin/bash
 # Pre-flight measurement on one window: ATTACK_PLAN.md 2.3 step 1.
 #
-#   sbatch hpc/preflight.slurm <snn|ann> <runid> <capture_dir> <capture_id> [window]
+#   sbatch hpc/preflight.slurm <snn|ann> <runid> <capture_dir> [window]
 #
 # Reports, for this model:
 #   * swap coverage -- which spiking modules a surrogate swap reaches. The ANN has none, and
@@ -30,12 +30,11 @@ cd "${SLURM_SUBMIT_DIR:-.}"
 source hpc/env.sh
 mkdir -p hpc/logs
 
-USAGE="usage: sbatch hpc/preflight.slurm <snn|ann> <runid> <capture_dir> <capture_id> [window]"
+USAGE="usage: sbatch hpc/preflight.slurm <snn|ann> <runid> <capture_dir> [window]"
 MODEL="${1:?${USAGE}}"
 RUNID="${2:?${USAGE}}"
 CAPTURE="${3:?${USAGE}}"
-CAPTURE_ID="${4:?${USAGE}}"
-WINDOW="${5:-}"
+WINDOW="${4:-}"
 
 case "${MODEL}" in
   snn|ann) ;;
@@ -56,10 +55,11 @@ export CARLA_SCRIPTS_ROOT
 WINDOW_ARG=""
 [ -n "${WINDOW}" ] && WINDOW_ARG="--preflight-window ${WINDOW}"
 
-echo "=== pre-flight: ${MODEL} on ${CAPTURE} (id ${CAPTURE_ID}) ==="
+echo "=== pre-flight: ${MODEL} (${RUNID}) on ${CAPTURE} ==="
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
-# --tensors is required by the parser but unused under --preflight, which reads events.npy.
+# --tensors only sets config["data"]["path"], which --preflight never reads; --id is
+# not needed at all when no dumps are written.
 # --surrogate stays native: the measurement swaps in its own probe whichever surrogate is
 # configured, so there is no A to supply and nothing to tune yet.
 # shellcheck disable=SC2086
@@ -68,7 +68,6 @@ python carla_eval/attack_carla.py --preflight ${WINDOW_ARG} \
     --runid "${RUNID}" \
     --tensors "results/carla_eval/saved_flow_data" \
     --capture "${CAPTURE}" \
-    --id "${CAPTURE_ID}" \
     --objective div \
     --epsilons 0
 

@@ -7,8 +7,7 @@
         --clean-pred results/carla_eval/pred/snn --out results/attack/snn
 
 The objective and the optimisation loop live in CARLA-hpc-scripts/attack_core, shared with
-OF_EV_SNN, so "the same attack across three models" is true by construction. This file is only
-the model-specific half.
+OF_EV_SNN. This file is only the model-specific half.
 
 The model is built exactly as predict_carla.py builds it, so the attacked run perturbs the
 network the clean run evaluated, not a differently-configured one.
@@ -135,16 +134,21 @@ def set_torch_backend(net):
 
 
 def preflight_input(capture_dir, model, window):
-    """One model input for `window`, encoded from events.npy in memory.
+    """One model input for `window`, voxelised from events.npy in memory.
 
-    The pre-flight runs before anything has been voxelised, and the pipeline deletes the voxels
-    once inference is done, so the saved_flow_data tensors cannot be relied on. events.npy is
-    the one artefact that is kept, and `input_from_events` is the same encoder the voxelised
-    path uses. num_chunks 2 (the ANN) needs the preceding window as well.
+    The pre-flight runs before anything has been voxelised, and the pipeline deletes the
+    saved_flow_data tensors once inference is done. This rebuilds the exact tensor the attack
+    would be handed: `events_to_voxel` over each window's own [t_start, t_start + window_s),
+    as carla_to_voxel.py writes it, then concatenated along the channel axis for num_chunks 2
+    the way the (prev, target) split list pairs them.
+
+    It deliberately does NOT go through `input_from_events`, which splits one span at its
+    midpoint and so assumes consecutive windows are adjacent.
     """
     from groundtruth.inspect_capture import load_capture
+    from carla_eval.carla_to_voxel import events_to_voxel
 
-    events, windows, _meta = load_capture(capture_dir, mmap=True)
+    events, windows, meta = load_capture(capture_dir, mmap=True)
     t_starts = windows["t_start_us"].to_numpy()
     chunks = model.num_chunks
     first = window - (chunks - 1)
@@ -152,19 +156,29 @@ def preflight_input(capture_dir, model, window):
         raise SystemExit(
             "--preflight-window %d is out of range: this model needs %d consecutive windows, "
             "so it must be in [%d, %d]" % (window, chunks, chunks - 1, len(t_starts) - 1))
+
+    window_us = int(round(float(meta["window_s"]) * 1e6))
+    height, width = model.config["loader"]["resolution"]
+    stride = (int(t_starts[window]) - int(t_starts[window - 1])
+              if window > 0 and not np.isnan(t_starts[window - 1]) else None)
+    print("capture geometry: window %d us, row stride %s us%s"
+          % (window_us, stride,
+             " (windows overlap)" if stride is not None and stride < window_us else ""))
+
+    voxels = []
+    t_all = events["t"]
     for w in range(first, window + 1):
         if np.isnan(t_starts[w]):
             raise SystemExit("window %d recorded no events; pick another "
                              "--preflight-window" % w)
+        t0 = int(t_starts[w])
+        lo, hi = np.searchsorted(t_all, (t0, t0 + window_us), side="left")
+        ev = events[lo:hi]
+        voxels.append(torch.as_tensor(
+            events_to_voxel(ev["x"], ev["y"], ev["t"], ev["pol"],
+                            model.num_bins, height, width)))
 
-    window_us = int(round(model.window_ms * 1000))
-    t0 = int(t_starts[first])
-    t1 = int(t_starts[window]) + window_us
-    if t1 - t0 != chunks * window_us:
-        raise SystemExit(
-            "windows %d..%d are not contiguous, so they cannot form this model's "
-            "%d-window input" % (first, window, chunks))
-    return model.input_from_events(events, t0, t1)
+    return torch.cat(voxels, dim=0).unsqueeze(0)
 
 
 def main():
@@ -176,7 +190,8 @@ def main():
     ap.add_argument("--path_mlflow", default="")
     ap.add_argument("--tensors", required=True, help="saved_flow_data from carla_to_voxel.py")
     ap.add_argument("--capture", required=True, help="the raw capture dir, for the band JSON")
-    ap.add_argument("--id", required=True, help="capture id / split-list prefix")
+    ap.add_argument("--id", default=None, help="capture id / split-list prefix; "
+                                               "not needed with --preflight")
     ap.add_argument("--objective", required=True,
                     choices=["random_sign", "epe_global", "epe_masked", "div"])
     ap.add_argument("--sign", default="suppress", choices=["suppress", "inflate", "none"],
@@ -237,7 +252,8 @@ def main():
     # --preflight only loads the model and measures it; it writes no dumps, so it should not
     # demand the paths a real run needs.
     if not args.preflight:
-        for flag, value in (("--clean-pred", args.clean_pred), ("--out", args.out)):
+        for flag, value in (("--clean-pred", args.clean_pred), ("--out", args.out),
+                            ("--id", args.id)):
             if value is None:
                 ap.error("%s is required unless --preflight" % flag)
 
