@@ -41,6 +41,12 @@ CONFIGS = {"snn": "configs/valid_DSEC_supervised_full.yml",
            "ann": "configs/valid_DSEC_ann.yml"}
 MODEL_NAMES = {"snn": "sdformerflow", "ann": "sttflownet_en4"}
 
+# `preds_out` is an nn.ModuleList of IFNode(v_threshold=inf) built in Spiking_STSwinNet's
+# __init__ and never called in any forward. An adaptive surrogate there would give NaN (u is
+# -inf), and the swap refuses to attach to it, so it is excluded by name. Nothing is lost:
+# the module never runs, so it contributes no gradient either way.
+SKIP_MODULES = ("preds_out",)
+
 
 def import_attack_core(path=None):
     """Import attack_core from the CARLA-hpc-scripts checkout, as carla_to_voxel.py does."""
@@ -353,7 +359,7 @@ def main():
         set_torch_backend(model.net)
         factory = surrogates.build_surrogate_factory(args.surrogate, **_surrogate_kwargs(args))
         if factory is not None:
-            handle = surrogates.swap_surrogates(model.net, factory=factory)
+            handle = surrogates.swap_surrogates(model.net, factory=factory, skip=SKIP_MODULES)
             cov = handle.coverage
             print("surrogate %s on %d of %d spiking modules"
                   % (args.surrogate, cov["n_swapped"], cov["n_candidates"]))
@@ -372,7 +378,7 @@ def main():
             preflight.report(model.net, model.forward_grad, x,
                              loss_fn=lambda f: (f ** 2).mean(),
                              native_alpha=2.0 if model.spiking else None,
-                             device=str(device))
+                             skip=SKIP_MODULES, device=str(device))
         finally:
             if handle is not None:
                 surrogates.restore_surrogates(handle)
