@@ -135,21 +135,27 @@ MANIFEST="hpc/logs/attack_grid_$(basename "${CAPTURE}").txt"
 : > "${MANIFEST}"
 for M in snn ann; do
   RUNID="${SNN_RUNID}"; [ "${M}" = "ann" ] && RUNID="${ANN_RUNID}"
+  # The ANN has no spiking neurons, so no surrogate can be swapped into it. The run
+  # matrix pairs the SNN's surrogate against the ANN's native gradient at the same
+  # epsilon, so the attack column is rewritten per model rather than per submission.
+  # attack_label() maps "pgd-native" back to "pgd", so legacy dump paths are unchanged.
+  M_ATTACK="${ATTACK}"
+  [ "${M}" = "ann" ] && M_ATTACK="${OPTIMISER}-native"
   while IFS= read -r RAMP; do
     [ -n "${RAMP}" ] || continue
     {
       if [ "${OPTIMISER}" = "sda" ]; then
         # SDA stops on a predicate, so it needs an objective that has one: no random_sign and
         # no epe_global. build_predicate covers div and epe_masked only.
-        echo "${M} ${RUNID} epe_masked   none      ${ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          suppress  ${ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          inflate   ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} epe_masked   none      ${M_ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          suppress  ${M_ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          inflate   ${M_ATTACK} ${ITERS} ${RAMP}"
       else
-        echo "${M} ${RUNID} random_sign  none      ${ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} epe_global   none      ${ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} epe_masked   none      ${ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          suppress  ${ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          inflate   ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} random_sign  none      ${M_ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} epe_global   none      ${M_ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} epe_masked   none      ${M_ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          suppress  ${M_ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          inflate   ${M_ATTACK} ${ITERS} ${RAMP}"
         # FGSM rows for the one-step-vs-iterative comparison, both signs. Skipped when
         # ATTACK is already fgsm, which would duplicate the rows above.
         if [ "${OPTIMISER}" != "fgsm" ]; then
