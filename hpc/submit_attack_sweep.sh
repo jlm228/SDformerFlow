@@ -59,10 +59,20 @@ if [ "${KEEP_PREVIOUS:-0}" = "0" ]; then
 fi
 
 RAND_INIT="${RAND_INIT:-1}"
-ITERS="${ITERS:-10}"
 ATTACK="${ATTACK:-pgd}"
+OPTIMISER="${ATTACK%%-*}"
+
+# Each optimiser has its own published step count, so ITERS defaults per attack rather than to
+# PGD's 10. A manifest that carried PGD's default into SA-PGD would run a tenth of the attack.
+case "${OPTIMISER}" in
+  fgsm)  ITERS="${ITERS:-1}" ;;
+  pgd)   ITERS="${ITERS:-10}" ;;
+  sapgd) ITERS="${ITERS:-100}" ;;
+  sda)   ITERS="${ITERS:-500}" ;;
+  *) echo "unknown attack '${ATTACK}'" >&2; exit 1 ;;
+esac
 # FGSM is one step by construction; the report records whatever the manifest says.
-[ "${ATTACK}" = "fgsm" ] && ITERS=1
+[ "${OPTIMISER}" = "fgsm" ] && ITERS=1
 if [ "${SMOKE:-0}" != "0" ]; then
     EPSILONS="0.0 0.02"
     ITERS=4
@@ -78,6 +88,44 @@ fi
 EPS_HUGE="$(python -c "import sys; print('%g' % (${EPS_HIGH_MULT:-2} * max(float(v) for v in sys.argv[1:])))" ${EPSILONS})"
 SWEEP_EPS="${EPSILONS} ${EPS_HUGE}"
 
+# SDA's last manifest column is not an epsilon: target mode carries tau factors, budget mode
+# event counts from `calibrate --events`. The 2x over-top probe does not apply to either.
+if [ "${OPTIMISER}" = "sda" ]; then
+  SWEEP_EPS="${SDA_LEVELS:?set SDA_LEVELS (tau factors for SDA_MODE=target, events for budget)}"
+fi
+
+# EPS_CHUNK splits a long ramp across array tasks: one SA-PGD task is ~101 forward+backward
+# passes per epsilon, so a full ramp can overrun the job's wall time. Each chunk keeps 0.0 so
+# every task still carries the clean case its table row needs.
+chunks_of() {
+  # $1 = chunk size; the rest = the ramp. Prints one chunk per line.
+  local k="$1"; shift
+  local zero="" rest=""
+  for v in "$@"; do
+    if [ "$(printf '%s' "${v}")" = "0.0" ] || [ "$(printf '%s' "${v}")" = "0" ]; then
+      zero="0.0"
+    else
+      rest="${rest} ${v}"
+    fi
+  done
+  set -- ${rest}
+  if [ "$#" -eq 0 ]; then printf '%s\n' "${zero}"; return; fi
+  while [ "$#" -gt 0 ]; do
+    local part="" i=0
+    while [ "${i}" -lt "${k}" ] && [ "$#" -gt 0 ]; do
+      part="${part} $1"; shift; i=$((i + 1))
+    done
+    printf '%s\n' "${zero}${part}"
+  done
+}
+
+if [ -n "${EPS_CHUNK:-}" ] && [ "${EPS_CHUNK}" -gt 0 ]; then
+  RAMPS="$(chunks_of "${EPS_CHUNK}" ${SWEEP_EPS})"
+  echo "EPS_CHUNK=${EPS_CHUNK}: the ramp is split across $(printf '%s\n' "${RAMPS}" | wc -l) task(s) per objective"
+else
+  RAMPS="${SWEEP_EPS}"
+fi
+
 # Per-submission override of the slurm header's --time.
 TIME="${TIME:-}"
 SB_TIME=""
@@ -87,23 +135,36 @@ MANIFEST="hpc/logs/attack_grid_$(basename "${CAPTURE}").txt"
 : > "${MANIFEST}"
 for M in snn ann; do
   RUNID="${SNN_RUNID}"; [ "${M}" = "ann" ] && RUNID="${ANN_RUNID}"
-  {
-    echo "${M} ${RUNID} random_sign  none      ${ATTACK} ${ITERS} ${SWEEP_EPS}"
-    echo "${M} ${RUNID} epe_global   none      ${ATTACK} ${ITERS} ${SWEEP_EPS}"
-    echo "${M} ${RUNID} epe_masked   none      ${ATTACK} ${ITERS} ${SWEEP_EPS}"
-    echo "${M} ${RUNID} div          suppress  ${ATTACK} ${ITERS} ${SWEEP_EPS}"
-    echo "${M} ${RUNID} div          inflate   ${ATTACK} ${ITERS} ${SWEEP_EPS}"
-    # FGSM rows for the one-step-vs-iterative comparison, both signs. Skipped when
-    # ATTACK is already fgsm, which would duplicate the rows above.
-    if [ "${ATTACK}" != "fgsm" ]; then
-      echo "${M} ${RUNID} div          suppress  fgsm 1 ${SWEEP_EPS}"
-      echo "${M} ${RUNID} div          inflate   fgsm 1 ${SWEEP_EPS}"
-    fi
-  } >> "${MANIFEST}"
+  while IFS= read -r RAMP; do
+    [ -n "${RAMP}" ] || continue
+    {
+      if [ "${OPTIMISER}" = "sda" ]; then
+        # SDA stops on a predicate, so it needs an objective that has one: no random_sign and
+        # no epe_global. build_predicate covers div and epe_masked only.
+        echo "${M} ${RUNID} epe_masked   none      ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          suppress  ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          inflate   ${ATTACK} ${ITERS} ${RAMP}"
+      else
+        echo "${M} ${RUNID} random_sign  none      ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} epe_global   none      ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} epe_masked   none      ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          suppress  ${ATTACK} ${ITERS} ${RAMP}"
+        echo "${M} ${RUNID} div          inflate   ${ATTACK} ${ITERS} ${RAMP}"
+        # FGSM rows for the one-step-vs-iterative comparison, both signs. Skipped when
+        # ATTACK is already fgsm, which would duplicate the rows above.
+        if [ "${OPTIMISER}" != "fgsm" ]; then
+          echo "${M} ${RUNID} div          suppress  fgsm 1 ${RAMP}"
+          echo "${M} ${RUNID} div          inflate   fgsm 1 ${RAMP}"
+        fi
+      fi
+    } >> "${MANIFEST}"
+  done <<EOF
+${RAMPS}
+EOF
 done
 N=$(wc -l < "${MANIFEST}")
 
-echo "manifest  ${MANIFEST} (${N} tasks: 2 models x 5 objectives)"
+echo "manifest  ${MANIFEST} (${N} tasks)"
 sed 's/^/    /' "${MANIFEST}"
 echo
 
@@ -115,7 +176,7 @@ echo
 DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS:-}"
 
 ARRAY_ID=$(sbatch --parsable --array=1-"${N}" ${SB_TIME} \
-    --export=ALL,RAND_INIT="${RAND_INIT}",DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS}" \
+    --export=ALL,RAND_INIT="${RAND_INIT}",ASSG_A="${ASSG_A:-}",SDA_MODE="${SDA_MODE:-}",SDA_DIRECTIONS="${SDA_DIRECTIONS:-}",SDA_RANK="${SDA_RANK:-}",SDA_K_INIT="${SDA_K_INIT:-}",SDA_FD_BATCH="${SDA_FD_BATCH:-}",SDA_EPE_MARGIN="${SDA_EPE_MARGIN:-}",NORM_SET="${NORM_SET:-}",DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS}" \
     hpc/attack_carla.slurm "${CAPTURE}" "${MANIFEST}")
 echo "attack array : job ${ARRAY_ID} (1-${N})"
 

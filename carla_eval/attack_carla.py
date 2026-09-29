@@ -204,7 +204,7 @@ def main():
                     help="div only: suppress reads tau LONG, inflate reads it SHORT. 'none' is "
                          "the placeholder the sweep manifest carries for objectives that have "
                          "no direction, and is ignored unless --objective is div")
-    ap.add_argument("--attack", default="pgd", choices=["fgsm", "pgd", "sapgd"])
+    ap.add_argument("--attack", default="pgd", choices=["fgsm", "pgd", "sapgd", "sda"])
     ap.add_argument("--surrogate", default="native",
                     choices=["native", "pdsg", "assg", "assgs"],
                     help="gradient substitute during the attack. assg is the Atan base, this "
@@ -222,6 +222,22 @@ def main():
                     help="floating re-normalises over the perturbed input on BOTH paths, so "
                          "the function attacked is the one scored. pinned keeps the clean "
                          "normalisation set, which is what the PGD dumps already on disk used")
+    ap.add_argument("--sda-tau-factors", type=float, nargs="+", default=None,
+                    help="target mode: how far the planner must be made to misread tau. "
+                         "suppress drives div to div_clean/f, inflate to f*div_clean")
+    ap.add_argument("--sda-budgets", type=float, nargs="+", default=None,
+                    help="budget mode: events per window, from calibrate --events")
+    ap.add_argument("--sda-epe-margin", type=float, default=None,
+                    help="target mode with --objective epe_masked: extra masked EPE, in pixels")
+    ap.add_argument("--sda-directions", default="inject_only",
+                    choices=["inject_only", "inject_remove"])
+    ap.add_argument("--sda-k-init", type=int, default=10,
+                    help="candidates tested per round grow as (n+1)*k_init; the search width, "
+                         "not the target")
+    ap.add_argument("--sda-iters", type=int, default=500)
+    ap.add_argument("--sda-fd-batch", type=int, default=1)
+    ap.add_argument("--sda-rank", default="grad", choices=["grad", "random"],
+                    help="random is the gradient-free control at matched event mass")
     ap.add_argument("--rhos", type=float, nargs="+", default=None,
                     help="the rho each epsilon was calibrated from, recorded in the reports")
     ap.add_argument("--scene-mass", type=float, default=None,
@@ -231,7 +247,7 @@ def main():
     ap.add_argument("--preflight", action="store_true",
                     help="measure swap coverage, mean |u| per spiking layer, timing and peak "
                          "memory on one window, then exit without attacking")
-    ap.add_argument("--epsilons", type=float, nargs="+", required=True)
+    ap.add_argument("--epsilons", type=float, nargs="+", default=None)
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--alpha", type=float, default=None, help="default: epsilon / 4")
     ap.add_argument("--no-rand-init", action="store_true",
@@ -257,6 +273,14 @@ def main():
 
     # --preflight only loads the model and measures it; it writes no dumps, so it should not
     # demand the paths a real run needs.
+    if args.attack == "sda":
+        # SDA has no epsilon: its levels are tau factors or event budgets.
+        if (args.sda_tau_factors is None) == (args.sda_budgets is None):
+            ap.error("--attack sda needs exactly one of --sda-tau-factors "
+                     "(target mode) or --sda-budgets (budget mode)")
+    elif not args.preflight and args.epsilons is None:
+        ap.error("--epsilons is required unless --attack sda or --preflight")
+
     if not args.preflight:
         for flag, value in (("--clean-pred", args.clean_pred), ("--out", args.out),
                             ("--id", args.id)):
@@ -402,7 +426,23 @@ def main():
     print("epsilons: %s" % " ".join("%g" % e for e in args.epsilons))
 
     try:
-        reports, _dirs = runner.run_sweep(
+        if args.attack == "sda":
+            reports, _dirs = runner.run_sweep_sda(
+                band=(lo, hi), load_window=load_window,
+                forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
+                epe_fn=mod_loss_function,
+                objective=args.objective, sign=args.sign, attack=label, seed=args.seed,
+                clean_pred_dir=args.clean_pred, out_root=args.out, capture_id=args.id,
+                model_name=MODEL_NAMES[args.model],
+                tau_factors=args.sda_tau_factors, budgets=args.sda_budgets,
+                epe_margin=args.sda_epe_margin,
+                domain='voxel', directions=args.sda_directions,
+                support_mode=args.support, k_init=args.sda_k_init, iters=args.sda_iters,
+                fd_batch=args.sda_fd_batch, rank=args.sda_rank,
+                bin_layout=bin_layout, surrogate_ctx=handle, scene_mass=args.scene_mass,
+                dump_adv_tensors=args.dump_adv_tensors, verbose=True)
+        else:
+            reports, _dirs = runner.run_sweep(
             band=(lo, hi), load_window=load_window,
             forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
             epe_fn=mod_loss_function,
