@@ -111,9 +111,22 @@ else
   LEVEL_ARGS="--iters ${ITERS} ${NRI} --epsilons ${EPSILONS}"
 fi
 
-[ -d "${TENSORS}" ] || {
-  echo "no ${TENSORS} -- run hpc/carla_eval.slurm ${MODEL} ${CAPTURE} <runid> first" >&2
-  exit 1; }
+
+# Build the tensors if they are not there, exactly as carla_eval.slurm does. Conversion writes
+# ~1.1 GB per capture, which submit_attack_sweep.sh removes once the whole array has finished.
+DONE_MARK="${TENSORS}/sequence_lists/${CAPTURE_ID}_split_seq.csv"
+mkdir -p "$(dirname "${TENSORS}")"
+(
+  flock 9
+  if [ -f "${DONE_MARK}" ]; then
+    echo "tensors already complete at ${TENSORS} -- skipping conversion"
+  else
+    echo "converting (no ${DONE_MARK})"
+    python carla_eval/carla_to_voxel.py "${CAPTURE}" --out "${TENSORS}" --capture-id "${CAPTURE_ID}"
+  fi
+) 9>"${TENSORS}.lock"
+
+[ -f "${DONE_MARK}" ] || { echo "conversion did not produce ${DONE_MARK}" >&2; exit 1; }
 [ -d "${CLEAN}" ] || {
   echo "no clean predictions at ${CLEAN} -- run hpc/carla_eval.slurm first; every attacked" >&2
   echo "output directory is SEEDED from it, so a band-limited attack has no gaps" >&2
