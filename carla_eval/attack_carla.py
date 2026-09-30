@@ -355,9 +355,9 @@ def main():
         for 1e-3 on one voxel. The PGD dumps already on disk were made pinned.
         """
         if args.norm_set == "floating":
-            return model.forward_grad
+            return with_begin_forward(model.forward_grad)
         nz = model.support(x_clean)
-        return lambda x: model.forward_grad(x, nz=nz)
+        return with_begin_forward(lambda x: model.forward_grad(x, nz=nz))
 
     def forward_eval(x):
         """Prediction with state reset first.
@@ -411,6 +411,20 @@ def main():
                 surrogates.restore_surrogates(handle)
         raise SystemExit(0)
 
+
+    # Every forward pass must tell the surrogate it is a new pass, or ASSG's per-time-step
+    # moment index keeps climbing: each pass writes to a fresh (M, D) starting at (1, 0), so the
+    # sharpness never adapts and the moments grow without bound. ATTACK_PLAN 1 asks for this at
+    # the start of each forward; it applies to the scoring pass too, which shares the index.
+    def with_begin_forward(fn):
+        if handle is None:
+            return fn
+
+        def wrapped(*args, **kwargs):
+            handle.begin_forward()
+            return fn(*args, **kwargs)
+        return wrapped
+
     g = torch.Generator(device="cpu")
 
     def random_sign_fn(x, eps, seed):
@@ -429,7 +443,8 @@ def main():
         if args.attack == "sda":
             reports, _dirs = runner.run_sweep_sda(
                 band=(lo, hi), load_window=load_window,
-                forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
+                forward_grad_factory=forward_grad_factory,
+            forward_eval=with_begin_forward(forward_eval),
                 epe_fn=mod_loss_function,
                 objective=args.objective, sign=args.sign, attack=label, seed=args.seed,
                 clean_pred_dir=args.clean_pred, out_root=args.out, capture_id=args.id,
@@ -444,7 +459,8 @@ def main():
         else:
             reports, _dirs = runner.run_sweep(
             band=(lo, hi), load_window=load_window,
-            forward_grad_factory=forward_grad_factory, forward_eval=forward_eval,
+            forward_grad_factory=forward_grad_factory,
+            forward_eval=with_begin_forward(forward_eval),
             epe_fn=mod_loss_function,
             objective=args.objective, sign=args.sign, attack=label,
             epsilons=args.epsilons, iters=args.iters, alpha=args.alpha, seed=args.seed,
