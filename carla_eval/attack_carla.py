@@ -235,7 +235,12 @@ def main():
                     help="candidates tested per round grow as (n+1)*k_init; the search width, "
                          "not the target")
     ap.add_argument("--sda-iters", type=int, default=500)
-    ap.add_argument("--sda-fd-batch", type=int, default=1)
+    ap.add_argument("--sda-fd-batch", type=int, default=1,
+                    help="candidates per forward pass. 1 because train-mode "
+                         "BatchNorm would pool statistics across candidates")
+    ap.add_argument("--sda-time-budget", type=float, default=None,
+                    help="seconds before a window is censored; keeps one slow window "
+                         "from consuming the job and starving every window after it")
     ap.add_argument("--sda-rank", default="grad", choices=["grad", "random"],
                     help="random is the gradient-free control at matched event mass")
     ap.add_argument("--rhos", type=float, nargs="+", default=None,
@@ -454,6 +459,7 @@ def main():
                 domain='voxel', directions=args.sda_directions,
                 support_mode=args.support, k_init=args.sda_k_init, iters=args.sda_iters,
                 fd_batch=args.sda_fd_batch, rank=args.sda_rank,
+                time_budget_s=args.sda_time_budget,
                 bin_layout=bin_layout, surrogate_ctx=handle, scene_mass=args.scene_mass,
                 dump_adv_tensors=args.dump_adv_tensors, verbose=True)
         else:
