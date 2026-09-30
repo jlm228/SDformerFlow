@@ -40,12 +40,18 @@ def _import_inspect_capture(path=None):
     """
     root = path or os.environ.get("CARLA_SCRIPTS_ROOT") or DEFAULT_CARLA_SCRIPTS
     root = os.path.abspath(root)
-    if not os.path.isfile(os.path.join(root, "inspect_capture.py")):
+    # groundtruth/ first: that is where inspect_capture.py lives, so CARLA_SCRIPTS_ROOT
+    # can be the repo root, which is what it means everywhere else. The root itself is
+    # still accepted, for a checkout that predates the move.
+    for cand in (os.path.join(root, "groundtruth"), root):
+        if os.path.isfile(os.path.join(cand, "inspect_capture.py")):
+            sys.path.insert(0, cand)
+            break
+    else:
         raise SystemExit(
-            "inspect_capture.py not found under %s.\n"
+            "inspect_capture.py not found in %s/groundtruth or %s.\n"
             "Point $CARLA_SCRIPTS_ROOT at your CARLA-hpc-scripts checkout, or pass "
-            "--carla-scripts." % root)
-    sys.path.insert(0, root)
+            "--carla-scripts." % (root, root))
     import inspect_capture  # noqa: E402
     return inspect_capture
 
