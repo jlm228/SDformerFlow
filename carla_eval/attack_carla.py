@@ -380,9 +380,19 @@ def main():
         return model.forward(x)
 
     def forward_eval_batch_raw(batch):
-        """(k, ...) -> (k, 2, H, W). The same transform and reset as forward_eval, one pass."""
+        """(k, 1, C, H, W) -> (k, 1, 2, H, W), one pass.
+
+        sda stacks candidates on a new leading axis, and each entry keeps the single-sample
+        batch axis load_window adds, so the two are folded together for the model and split
+        again on the way out.
+        """
+        if batch.dim() < 2 or batch.shape[1] != 1:
+            raise ValueError(
+                "expected a batch of single samples shaped (k, 1, ...); got %s"
+                % (tuple(batch.shape),))
         model.reset_state()
-        return model.forward(batch)
+        flat = batch.reshape(batch.shape[0], *batch.shape[2:])
+        return model.forward(flat).unsqueeze(1)
 
     # num_chunks 2 (the ANN) puts the PREVIOUS window in the first num_bins channels and the
     # target window in the last, so consecutive samples share a window and the perturbation has

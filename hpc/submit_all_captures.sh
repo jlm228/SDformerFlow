@@ -2,7 +2,7 @@
 # The whole sweep over every capture, from one command.
 #
 #   bash hpc/submit_all_captures.sh <captures_dir>
-#   ATTACK=sda-pdsg SDA_MODE=target TAU_PROBE=<record.json> \
+#   ATTACK=sda-pdsg SDA_MODE=target CAPTURE_IDS="001 004 028" \
 #       bash hpc/submit_all_captures.sh ../CARLA-hpc-scripts/captures/135_scenarios
 #   LIMIT=5 DRY_RUN=1 bash hpc/submit_all_captures.sh <captures_dir>    # see what it would do
 #
@@ -14,10 +14,9 @@
 # and its voxel tensors, so the per-capture submission already carries both and only the clean
 # checks and the clear need to name them.
 #
-# SDA needs a per-capture target: the tau factor at which that capture's outcome tier changes,
-# from a tau_probe record. A capture the probe never moved has no meaningful target, so it is
-# SKIPPED rather than attacked against a threshold the planner does not care about. Set
-# SDA_FALLBACK to attack those at a fixed factor instead.
+# SDA needs a target per capture AND per model: the tau factor at which that model's outcome
+# tier changes, read from tau_probe_<model>_<sign>.json. A capture the probe never moved for
+# some model is SKIPPED. Set SDA_FALLBACK to attack those at a fixed factor instead.
 
 set -euo pipefail
 cd "$(cd "$(dirname "$0")/.." && pwd)"
@@ -40,21 +39,42 @@ for MODEL in ${MODELS}; do
     echo "       run hpc/carla_eval.slurm first" >&2; exit 1; }
 done
 
-mapfile -t DIRS < <(ls -d "${CAPTURES}"/[0-9][0-9][0-9] 2>/dev/null)
+# CAPTURE_IDS picks an explicit set, in the order given, so a run can cover a chosen design
+# rather than the first N on disk. Without it, every capture in the directory.
+if [ -n "${CAPTURE_IDS:-}" ]; then
+  DIRS=()
+  for ID in ${CAPTURE_IDS}; do
+    [ -d "${CAPTURES}/${ID}" ] || { echo "no capture ${CAPTURES}/${ID}" >&2; exit 1; }
+    DIRS+=("${CAPTURES}/${ID}")
+  done
+else
+  mapfile -t DIRS < <(ls -d "${CAPTURES}"/[0-9][0-9][0-9] 2>/dev/null)
+fi
 [ "${#DIRS[@]}" -gt 0 ] || { echo "no captures under ${CAPTURES}" >&2; exit 1; }
 [ "${LIMIT}" -gt 0 ] && DIRS=("${DIRS[@]:0:${LIMIT}}")
 
-# SDA's targets come from the probe, so the record is required up front rather than discovered
-# missing 60 captures in.
+# The probe writes tau_probe_<model>_<sign>.json, naming this repo's snn/ann
+# sdformerflow/sttflownet_en4.
+probe_model() {
+  case "$1" in
+    snn) echo "sdformerflow" ;;
+    ann) echo "sttflownet_en4" ;;
+    *)   echo "$1" ;;
+  esac
+}
+
+TAU_DIR=""
+TAU_SIGN="${TAU_SIGN:-suppress}"
 if [ "${OPTIMISER}" = "sda" ]; then
-  TAU_PROBE="${TAU_PROBE:?set TAU_PROBE to a tau_probe JSON for SDA_MODE=target}"
-  [ -f "${TAU_PROBE}" ] || { echo "no tau probe record at ${TAU_PROBE}" >&2; exit 1; }
+  TAU_DIR="${TAU_DIR_IN:-${CARLA_SCRIPTS_ROOT}/results/tau_probe}"
+  [ -d "${TAU_DIR}" ] || {
+    echo "no tau probe directory at ${TAU_DIR}; set TAU_DIR_IN" >&2; exit 1; }
 fi
 
 echo "captures   ${CAPTURES} (${#DIRS[@]} to submit)"
 echo "models     ${MODELS}"
 echo "attack     ${ATTACK}"
-[ "${OPTIMISER}" = "sda" ] && echo "targets    ${TAU_PROBE}"
+[ "${OPTIMISER}" = "sda" ] && echo "targets    ${TAU_DIR} (sign ${TAU_SIGN})"
 echo
 
 # Clear ONCE, before the loop, for the same reason submit_attack_sweep.sh clears: a previous
@@ -70,9 +90,6 @@ fi
 SUBMITTED=0
 SKIPPED=""
 LOG="hpc/logs/submit_all_$(date +%Y%m%d_%H%M%S).txt"
-TAU_ABS=""
-[ "${OPTIMISER}" = "sda" ] && \
-  TAU_ABS="$(cd "$(dirname "${TAU_PROBE}")" && pwd)/$(basename "${TAU_PROBE}")"
 
 for CAP in "${DIRS[@]}"; do
   ID="$(basename "${CAP}")"
@@ -84,13 +101,26 @@ for CAP in "${DIRS[@]}"; do
 
   LEVELS=""
   if [ "${OPTIMISER}" = "sda" ]; then
-    # tau_levels exits 1 when this capture never reached a tier change.
-    if ! LEVELS=$( cd "${CARLA_SCRIPTS_ROOT}" && python -m attack_core.tau_levels \
-                     "${TAU_ABS}" "${ID}" \
-                     ${SDA_FALLBACK:+--fallback "${SDA_FALLBACK}"} 2>/dev/null ); then
-      SKIPPED="${SKIPPED} ${ID}:no-zeta"
-      continue
-    fi
+    # One tau factor per model: each is the misreading that moves THAT model's outcome
+    # tier. A capture with no tier change for some model is skipped rather than attacked
+    # against a threshold that model's planner does not respond to.
+    LEVELS="ok"
+    for MM in ${MODELS}; do
+      REC="${TAU_DIR}/tau_probe_$(probe_model "${MM}")_${TAU_SIGN}.json"
+      [ -f "${REC}" ] || { echo "no tau probe record ${REC}" >&2; exit 1; }
+      if ! V=$( cd "${CARLA_SCRIPTS_ROOT}" && python -m attack_core.tau_levels \
+                  "${REC}" "${ID}" \
+                  ${SDA_FALLBACK:+--fallback "${SDA_FALLBACK}"} 2>/dev/null ); then
+        SKIPPED="${SKIPPED} ${ID}:no-zeta-${MM}"
+        LEVELS=""
+        break
+      fi
+      UP=$(echo "${MM}" | tr a-z A-Z)
+      eval "export SDA_LEVELS_${UP}=\"${V}\""
+      LEVELS="${LEVELS} ${MM}=${V}"
+    done
+    [ -n "${LEVELS}" ] || continue
+    LEVELS="${LEVELS#ok }"
   fi
 
   if [ "${DRY_RUN}" != "0" ]; then
@@ -100,8 +130,6 @@ for CAP in "${DIRS[@]}"; do
   fi
 
   echo "=== ${ID}${LEVELS:+ (tau ${LEVELS})} ===" | tee -a "${LOG}"
-  # export, not an env-var prefix: a prefix would word-split a multi-value level list.
-  [ -n "${LEVELS}" ] && export SDA_LEVELS="${LEVELS}"
   KEEP_PREVIOUS=1 ATTACK="${ATTACK}" \
     bash hpc/submit_attack_sweep.sh "${CAP}" 2>&1 | tee -a "${LOG}"
   SUBMITTED=$((SUBMITTED + 1))

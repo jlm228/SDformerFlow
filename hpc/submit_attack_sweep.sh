@@ -91,7 +91,18 @@ SWEEP_EPS="${EPSILONS} ${EPS_HUGE}"
 # SDA's last manifest column is not an epsilon: target mode carries tau factors, budget mode
 # event counts from `calibrate --events`. The 2x over-top probe does not apply to either.
 if [ "${OPTIMISER}" = "sda" ]; then
-  SWEEP_EPS="${SDA_LEVELS:?set SDA_LEVELS (tau factors for SDA_MODE=target, events for budget)}"
+  # A tau factor is the misreading that degrades THIS model's outcome tier, so it differs per
+  # model: attacking one at the other's threshold would compare them against different targets.
+  # SDA_LEVELS_SNN / SDA_LEVELS_ANN override SDA_LEVELS, which stands in for both.
+  SWEEP_EPS="${SDA_LEVELS:-}"
+  SDA_LEVELS_SNN="${SDA_LEVELS_SNN:-${SDA_LEVELS:-}}"
+  SDA_LEVELS_ANN="${SDA_LEVELS_ANN:-${SDA_LEVELS:-}}"
+  for MM in ${MODELS:-snn ann}; do
+    eval "MV=\${SDA_LEVELS_$(echo "${MM}" | tr a-z A-Z)}"
+    [ -n "${MV}" ] || {
+      echo "ERROR: no SDA levels for ${MM}. Set SDA_LEVELS_$(echo "${MM}" | tr a-z A-Z)," >&2
+      echo "       or SDA_LEVELS for every model." >&2; exit 1; }
+  done
 fi
 
 # EPS_CHUNK splits a long ramp across array tasks: one SA-PGD task is ~101 forward+backward
@@ -133,8 +144,13 @@ if [ -n "${TIME}" ]; then SB_TIME="--time=${TIME}"; fi
 
 MANIFEST="hpc/logs/attack_grid_$(basename "${CAPTURE}").txt"
 : > "${MANIFEST}"
-for M in snn ann; do
+for M in ${MODELS:-snn ann}; do
   RUNID="${SNN_RUNID}"; [ "${M}" = "ann" ] && RUNID="${ANN_RUNID}"
+  # SDA's levels are per model, so this model's ramp replaces the shared one.
+  M_RAMPS="${RAMPS}"
+  if [ "${OPTIMISER}" = "sda" ]; then
+    eval "M_RAMPS=\${SDA_LEVELS_$(echo "${M}" | tr a-z A-Z)}"
+  fi
   # The ANN has no spiking neurons, so no surrogate can be swapped into it. The run
   # matrix pairs the SNN's surrogate against the ANN's native gradient at the same
   # epsilon, so the attack column is rewritten per model rather than per submission.
@@ -147,9 +163,15 @@ for M in snn ann; do
       if [ "${OPTIMISER}" = "sda" ]; then
         # SDA stops on a predicate, so it needs an objective that has one: no random_sign and
         # no epe_global. build_predicate covers div and epe_masked only.
-        echo "${M} ${RUNID} epe_masked   none      ${M_ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          suppress  ${M_ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          inflate   ${M_ATTACK} ${ITERS} ${RAMP}"
+        for OBJ in ${SDA_OBJECTIVES:-epe_masked div_suppress div_inflate}; do
+          case "${OBJ}" in
+            epe_masked)  echo "${M} ${RUNID} epe_masked   none      ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            div_suppress) echo "${M} ${RUNID} div          suppress  ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            div_inflate) echo "${M} ${RUNID} div          inflate   ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            *) echo "unknown SDA objective '${OBJ}': use epe_masked, div_suppress or div_inflate" >&2
+               exit 1 ;;
+          esac
+        done
       else
         echo "${M} ${RUNID} random_sign  none      ${M_ATTACK} ${ITERS} ${RAMP}"
         echo "${M} ${RUNID} epe_global   none      ${M_ATTACK} ${ITERS} ${RAMP}"
@@ -165,7 +187,7 @@ for M in snn ann; do
       fi
     } >> "${MANIFEST}"
   done <<EOF
-${RAMPS}
+${M_RAMPS}
 EOF
 done
 N=$(wc -l < "${MANIFEST}")
