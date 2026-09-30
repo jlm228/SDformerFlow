@@ -59,7 +59,11 @@ SIGN="${SIGN:-suppress}"
 # and at 500 one window alone can outlast the job, leaving no report to read. Windows
 # that stop below 100 are measured exactly; the rest are counted as censored.
 ITERS="${ITERS:-100}"
-RUNID="${RUNID:-sda_probe}"
+# The MLflow run id of the trained checkpoint, as every other job here resolves it.
+# "sda_probe" is not a run id: mlflow.get_run would reject it.
+RUNID="${RUNID:-$(cat "hpc/logs/${MODEL}_runid.txt" 2>/dev/null || true)}"
+[ -n "${RUNID}" ] || {
+  echo "no run id: set RUNID, or write hpc/logs/${MODEL}_runid.txt" >&2; exit 1; }
 
 CARLA_SCRIPTS_ROOT="${CARLA_SCRIPTS_ROOT:-../CARLA-hpc-scripts}"
 export CARLA_SCRIPTS_ROOT
@@ -101,7 +105,7 @@ BAND_HI=$((BAND_LO + WINDOWS - 1))
 
 echo "=== SDA stopping-round probe ==="
 echo "capture     ${CAPTURE} (id ${CAPTURE_ID})"
-echo "model       ${MODEL}"
+echo "model       ${MODEL} (run ${RUNID})"
 echo "windows     ${BAND_LO}..${BAND_HI} (${WINDOWS} of the band)"
 echo "objective   ${OBJECTIVE} ${SIGN}"
 echo "tau factor  ${TAU_FACTOR}"
