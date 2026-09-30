@@ -108,9 +108,13 @@ for CAP in "${DIRS[@]}"; do
     for MM in ${MODELS}; do
       REC="${TAU_DIR}/tau_probe_$(probe_model "${MM}")_${TAU_SIGN}.json"
       [ -f "${REC}" ] || { echo "no tau probe record ${REC}" >&2; exit 1; }
+      # Absolute, because the lookup runs after a cd into the scripts repo.
+      REC_ABS="$(cd "$(dirname "${REC}")" && pwd)/$(basename "${REC}")"
+      # 2>&1, so a failed lookup reports WHY instead of vanishing into the skip list.
       if ! V=$( cd "${CARLA_SCRIPTS_ROOT}" && python -m attack_core.tau_levels \
-                  "${REC}" "${ID}" \
-                  ${SDA_FALLBACK:+--fallback "${SDA_FALLBACK}"} 2>/dev/null ); then
+                  "${REC_ABS}" "${ID}" \
+                  ${SDA_FALLBACK:+--fallback "${SDA_FALLBACK}"} 2>&1 ); then
+        echo "  ${ID} ${MM}: ${V}" >&2
         SKIPPED="${SKIPPED} ${ID}:no-zeta-${MM}"
         LEVELS=""
         break
