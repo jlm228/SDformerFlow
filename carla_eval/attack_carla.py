@@ -235,9 +235,10 @@ def main():
                     help="candidates tested per round grow as (n+1)*k_init; the search width, "
                          "not the target")
     ap.add_argument("--sda-iters", type=int, default=500)
-    ap.add_argument("--sda-fd-batch", type=int, default=1,
-                    help="candidates per forward pass. 1 because train-mode "
-                         "BatchNorm would pool statistics across candidates")
+    ap.add_argument("--sda-fd-batch", type=int, default=4,
+                    help="candidates per forward pass. 4 fits an 80 GB card at ~14 GB a "
+                         "window forward-only; lower it on a smaller GPU. Above 1, carla_eval.batched_eval makes the batch behave as separate single passes and checks that "
+                         "it does. 1 disables batching entirely")
     ap.add_argument("--sda-time-budget", type=float, default=None,
                     help="seconds before a window is censored; keeps one slow window "
                          "from consuming the job and starving every window after it")
@@ -367,6 +368,8 @@ def main():
         nz = model.support(x_clean)
         return with_begin_forward(lambda x: model.forward_grad(x, nz=nz))
 
+    from carla_eval.batched_eval import BatchedEval, per_sample_norms
+
     def forward_eval(x):
         """Prediction with state reset first.
 
@@ -375,6 +378,11 @@ def main():
         """
         model.reset_state()
         return model.forward(x)
+
+    def forward_eval_batch_raw(batch):
+        """(k, ...) -> (k, 2, H, W). The same transform and reset as forward_eval, one pass."""
+        model.reset_state()
+        return model.forward(batch)
 
     # num_chunks 2 (the ANN) puts the PREVIOUS window in the first num_bins channels and the
     # target window in the last, so consecutive samples share a window and the perturbation has
@@ -456,6 +464,16 @@ def main():
         level_name = "epsilons"
     print("%s: %s" % (level_name, " ".join("%g" % v for v in levels)))
 
+    # SDA is the only attack here that evaluates batches, and at batch 1 the wrappers only cost.
+    norm_handle = None
+    batched_eval = None
+    if args.attack == "sda" and args.sda_fd_batch > 1:
+        norm_handle = per_sample_norms(model.net)
+        print("batched candidates: fd_batch %d, %d batch-coupling norm layer(s) wrapped"
+              % (args.sda_fd_batch, norm_handle.n_wrapped))
+        batched_eval = BatchedEval(single=with_begin_forward(forward_eval),
+                                   batched=with_begin_forward(forward_eval_batch_raw))
+
     if args.dry_run:
         # Everything above is setup a real run shares: arguments, the band, the tensors,
         # the checkpoint and the surrogate swap. Checking it here costs seconds on a login
@@ -464,6 +482,8 @@ def main():
               % (len(levels), lo, hi))
         if handle is not None:
             surrogates.restore_surrogates(handle)
+        if norm_handle is not None:
+            norm_handle.restore()
         raise SystemExit(0)
 
     try:
@@ -471,7 +491,8 @@ def main():
             reports, _dirs = runner.run_sweep_sda(
                 band=(lo, hi), load_window=load_window,
                 forward_grad_factory=forward_grad_factory,
-            forward_eval=with_begin_forward(forward_eval),
+                forward_eval=with_begin_forward(forward_eval),
+                forward_eval_batch=batched_eval,
                 epe_fn=mod_loss_function,
                 objective=args.objective, sign=args.sign, attack=label, seed=args.seed,
                 clean_pred_dir=args.clean_pred, out_root=args.out, capture_id=args.id,
@@ -503,9 +524,11 @@ def main():
             rand_init=not args.no_rand_init, random_sign_fn=random_sign_fn)
     finally:
         # Must run even when the attack raises, or a failed window leaves the adaptive
-        # surrogate installed for whatever runs next in this process.
+        # surrogate, or the per-sample norm wrappers, installed for whatever runs next.
         if handle is not None:
             surrogates.restore_surrogates(handle)
+        if norm_handle is not None:
+            norm_handle.restore()
 
     paths = runner.write_reports(reports, args.report or os.path.join(args.out, "reports"),
                                  reports[levels[0]]["label"])

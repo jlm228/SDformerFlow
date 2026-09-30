@@ -48,10 +48,10 @@ case "${MODEL}" in
 esac
 
 WINDOWS="${WINDOWS:-5}"
-# 1 by default because the SNN's BatchNorm runs in train mode: a batch larger than one changes
-# the statistics each candidate sees, so it is only correct through a per-sample wrapper. Raise
-# it for the ANN, or once that wrapper is confirmed present.
-FD_BATCH="${FD_BATCH:-1}"
+# carla_eval.batched_eval wraps the train-mode BatchNorm so a batch behaves as separate single
+# passes, and verifies that on its first batched call. 4 fits an 80 GB card; FD_BATCH=1
+# disables batching, which is the fallback if that check ever fires.
+FD_BATCH="${FD_BATCH:-4}"
 OBJECTIVE="${OBJECTIVE:-div}"
 SIGN="${SIGN:-suppress}"
 # 100, not the published 500. A window that has not stopped by round 100 already costs

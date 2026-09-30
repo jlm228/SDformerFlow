@@ -41,17 +41,20 @@ def prepare_chunk(chunk, config, spiking):
         # An entirely empty window is not hypothetical: carla_to_voxel.py writes a zero voxel
         # whenever a window carried fewer than two events, and torch.min raises on an empty
         # reduction. Nothing to normalise, so leave it alone.
-        nonzero = chunk[chunk != 0]
-        if nonzero.numel():
+        mask = chunk != 0
+        if mask.any():
+            # Per sample, so batching cannot change any one sample's scaling.
             if norm == "minmax":
-                # Over non-zero entries only -- the voxel is mostly empty.
-                lo, hi = torch.min(nonzero), torch.max(nonzero)
-                if not lo == hi:
-                    chunk[chunk != 0] = (chunk[chunk != 0] - lo) / (hi - lo)
+                lo, hi, any_ = _per_sample_bounds(chunk, mask)
+                scale = torch.where((hi > lo) & any_, hi - lo, torch.ones_like(hi))
+                shift = torch.where((hi > lo) & any_, lo, torch.zeros_like(lo))
+                chunk = torch.where(mask, (chunk - shift) / scale, chunk)
             elif norm == "std":
-                mean, stddev = nonzero.mean(), nonzero.std()
-                if stddev > 0:
-                    chunk[chunk != 0] = (chunk[chunk != 0] - mean) / stddev
+                mean, stddev, n = _per_sample_moments(chunk, mask)
+                ok = (stddev > 0) & (n > 1)
+                chunk = torch.where(
+                    mask & ok, (chunk - mean) / torch.where(ok, stddev, torch.ones_like(stddev)),
+                    chunk)
 
     spike_th = config["data"]["spike_th"]
     if spike_th is not None:
@@ -60,6 +63,29 @@ def prepare_chunk(chunk, config, spiking):
         chunk[chunk < spike_th] = 0
 
     return chunk
+
+
+def _per_sample_bounds(chunk, mask):
+    """(lo, hi, any) per sample: min and max over the masked cells, keeping dims for broadcast.
+
+    Reduced over every dim but 0, so a batch of k candidates cannot share one lo/hi.
+    """
+    dims = tuple(range(1, chunk.dim()))
+    big = torch.finfo(chunk.dtype).max
+    lo = torch.where(mask, chunk, torch.full_like(chunk, big)).amin(dim=dims, keepdim=True)
+    hi = torch.where(mask, chunk, torch.full_like(chunk, -big)).amax(dim=dims, keepdim=True)
+    return lo, hi, mask.any(dim=dims, keepdim=True)
+
+
+def _per_sample_moments(chunk, mask):
+    """(mean, std, n) per sample over the masked cells, std with Bessel's correction."""
+    dims = tuple(range(1, chunk.dim()))
+    kept = torch.where(mask, chunk, torch.zeros_like(chunk))
+    n = mask.sum(dim=dims, keepdim=True).to(chunk.dtype)
+    mean = kept.sum(dim=dims, keepdim=True) / n.clamp(min=1)
+    var = torch.where(mask, (chunk - mean) ** 2, torch.zeros_like(chunk)).sum(
+        dim=dims, keepdim=True) / (n - 1).clamp(min=1)
+    return mean, var.sqrt(), n
 
 
 def _reshape(chunk, config, spiking):
@@ -127,16 +153,19 @@ def prepare_chunk_differentiable(chunk, config, spiking, nz=None):
                 "nz has shape %s but the reshaped chunk is %s -- build it with "
                 "nonzero_support(clean_chunk, config, spiking), which reshapes first"
                 % (tuple(mask.shape), tuple(chunk.shape)))
-        vals = chunk[mask]
-        if vals.numel():
+        if mask.any():
+            # Per sample, so batching cannot change any one sample's scaling.
             if norm == "minmax":
-                lo, hi = torch.min(vals), torch.max(vals)
-                if not bool(lo == hi):
-                    chunk = torch.where(mask, (chunk - lo) / (hi - lo), chunk)
+                lo, hi, any_ = _per_sample_bounds(chunk, mask)
+                scale = torch.where((hi > lo) & any_, hi - lo, torch.ones_like(hi))
+                shift = torch.where((hi > lo) & any_, lo, torch.zeros_like(lo))
+                chunk = torch.where(mask, (chunk - shift) / scale, chunk)
             elif norm == "std":
-                mean, stddev = vals.mean(), vals.std()
-                if bool(stddev > 0):
-                    chunk = torch.where(mask, (chunk - mean) / stddev, chunk)
+                mean, stddev, n = _per_sample_moments(chunk, mask)
+                ok = (stddev > 0) & (n > 1)
+                chunk = torch.where(
+                    mask & ok, (chunk - mean) / torch.where(ok, stddev, torch.ones_like(stddev)),
+                    chunk)
 
     spike_th = config["data"]["spike_th"]
     if spike_th is not None:
