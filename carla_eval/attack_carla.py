@@ -482,7 +482,8 @@ def main():
         print("batched candidates: fd_batch %d, %d batch-coupling norm layer(s) wrapped"
               % (args.sda_fd_batch, norm_handle.n_wrapped))
         batched_eval = BatchedEval(single=with_begin_forward(forward_eval),
-                                   batched=with_begin_forward(forward_eval_batch_raw))
+                                   batched=with_begin_forward(forward_eval_batch_raw),
+                                   handle=norm_handle)
 
     if args.dry_run:
         # Everything above is setup a real run shares: arguments, the band, the tensors,
