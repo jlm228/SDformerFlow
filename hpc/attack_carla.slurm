@@ -75,7 +75,9 @@ esac
 CAPTURE_ID="carla_$(basename "${CAPTURE}")"
 TENSORS="${CAPTURE}/saved_flow_data"
 CLEAN="results/carla_eval/pred/${MODEL}"
-OUT="results/attack/${MODEL}"
+# OUT_ROOT lets a calibration run (hpc/submit_assg_grid.sh) keep its cells out of the sweep's
+# results/attack, which the sweep submitters clear and score.
+OUT="${OUT_ROOT:-results/attack}/${MODEL}"
 LABEL="${OBJECTIVE}"
 [ "${OBJECTIVE}" = "div" ] && LABEL="div_${SIGN}"
 # The attack is part of the label: one manifest runs the same objective under both PGD

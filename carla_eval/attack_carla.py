@@ -235,10 +235,13 @@ def main():
                     help="candidates tested per round grow as (n+1)*k_init; the search width, "
                          "not the target")
     ap.add_argument("--sda-iters", type=int, default=500)
-    ap.add_argument("--sda-fd-batch", type=int, default=4,
-                    help="candidates per forward pass. 4 fits an 80 GB card at ~14 GB a "
-                         "window forward-only; lower it on a smaller GPU. Above 1, carla_eval.batched_eval makes the batch behave as separate single passes and checks that "
-                         "it does. 1 disables batching entirely")
+    ap.add_argument("--sda-fd-batch", type=int, default=None,
+                    help="candidates per forward pass; default 1 for the snn, 4 for the ann. "
+                         "The snn must stay at 1: window_partition_v2 folds the batch into "
+                         "the window-depth axis that its spiking neurons and positional "
+                         "encoding treat as time, so batched candidates leak into each other. "
+                         "Above 1 on the ann, carla_eval.batched_eval checks that a batch "
+                         "behaves as separate single passes")
     ap.add_argument("--sda-time-budget", type=float, default=None,
                     help="seconds before a window is censored; keeps one slow window "
                          "from consuming the job and starving every window after it")
@@ -474,6 +477,15 @@ def main():
         level_name = "epsilons"
     print("%s: %s" % (level_name, " ".join("%g" % v for v in levels)))
 
+    if args.sda_fd_batch is None:
+        args.sda_fd_batch = 1 if args.model == "snn" else 4
+    if args.attack == "sda" and args.model == "snn" and args.sda_fd_batch > 1:
+        # Not a BatchNorm problem: window_partition_v2 views (B, ...) as (Wd, B*nW, ...), so
+        # with B > 1 the axis the spiking neurons integrate over and the positional encoding
+        # indexes holds different candidates. Only a model change could fix that.
+        raise SystemExit("--sda-fd-batch must be 1 for the snn: its window attention couples "
+                         "the candidates in a batch (see --help)")
+
     # SDA is the only attack here that evaluates batches, and at batch 1 the wrappers only cost.
     norm_handle = None
     batched_eval = None
@@ -540,6 +552,13 @@ def main():
             surrogates.restore_surrogates(handle)
         if norm_handle is not None:
             norm_handle.restore()
+
+    # The surrogate's settings travel with the results: A is tuned and frozen per model, and
+    # attack_core.assg_grid reads it from here rather than from a directory name.
+    sg = handle.surrogates[0] if handle is not None and len(handle) else None
+    surrogate_params = sg.params() if hasattr(sg, "params") else {"surrogate": args.surrogate}
+    for rep in reports.values():
+        rep["surrogate_params"] = surrogate_params
 
     paths = runner.write_reports(reports, args.report or os.path.join(args.out, "reports"),
                                  reports[levels[0]]["label"])

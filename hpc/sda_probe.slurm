@@ -2,7 +2,7 @@
 # Measure where SDA's predicate stops, on a handful of windows.
 #
 #   sbatch hpc/sda_probe.slurm <capture_dir> <tau_factor> <snn|ann>
-#   WINDOWS=8 FD_BATCH=2 sbatch hpc/sda_probe.slurm <capture_dir> 2.5 snn
+#   WINDOWS=8 FD_BATCH=2 sbatch hpc/sda_probe.slurm <capture_dir> 2.5 ann
 #
 # SDA's cost is quadratic in the round its predicate is met, so a full sweep cannot be sized
 # until that round is known. This runs the real attack on a few windows and reports where it
@@ -11,11 +11,10 @@
 # N is capped below the published 500 (see ITERS): a window still running at round 100 is
 # already past any affordable sweep, so it is counted censored rather than run to 500.
 #
-# Run it at two FD_BATCH values. The candidate batch is the other unknown: the swin SNN peaks at
-# ~23.4 GB a window, the worst case in the study, so the reference's 64 is far out of reach, and
-# whether a batch costs one pass or one pass per candidate changes the projection by an order of
-# magnitude. The SNN's BatchNorm runs in train mode, so FD_BATCH=1 is also the correctness-safe
-# setting -- results are identical either way, only the throughput differs.
+# The SNN runs at FD_BATCH=1 only: its window attention folds the batch into the axis its spiking
+# neurons treat as time, so batched candidates leak into each other and attack_carla.py refuses
+# anything larger. On the ANN, try two FD_BATCH values: whether a batch costs one pass or one
+# pass per candidate changes the projection by an order of magnitude.
 #
 # Read the result with:
 #   python -m attack_core.sda_rounds <report glob>
@@ -48,10 +47,10 @@ case "${MODEL}" in
 esac
 
 WINDOWS="${WINDOWS:-5}"
-# carla_eval.batched_eval wraps the train-mode BatchNorm so a batch behaves as separate single
-# passes, and verifies that on its first batched call. 4 fits an 80 GB card; FD_BATCH=1
-# disables batching, which is the fallback if that check ever fires.
-FD_BATCH="${FD_BATCH:-4}"
+# Unset, attack_carla.py picks the model's default: 1 for the snn (it cannot batch), 4 for the ann.
+FD_BATCH="${FD_BATCH:-}"
+FD_ARGS=""
+[ -n "${FD_BATCH}" ] && FD_ARGS="--sda-fd-batch ${FD_BATCH}"
 OBJECTIVE="${OBJECTIVE:-div}"
 SIGN="${SIGN:-suppress}"
 # 100, not the published 500. A window that has not stopped by round 100 already costs
@@ -110,7 +109,7 @@ echo "windows     ${BAND_LO}..${BAND_HI} (${WINDOWS} of the band)"
 echo "objective   ${OBJECTIVE} ${SIGN}"
 echo "tau factor  ${TAU_FACTOR}"
 echo "N           ${ITERS} (a window reaching this is counted censored)"
-echo "fd batch    ${FD_BATCH}"
+echo "fd batch    ${FD_BATCH:-model default}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 echo
 
@@ -127,7 +126,7 @@ python carla_eval/attack_carla.py \
     --surrogate pdsg \
     --sda-tau-factors "${TAU_FACTOR}" \
     --sda-iters "${ITERS}" \
-    --sda-fd-batch "${FD_BATCH}" \
+    ${FD_ARGS} \
     --band-lo "${BAND_LO}" \
     --band-hi "${BAND_HI}" \
     --clean-pred "${CLEAN}" \
@@ -138,7 +137,7 @@ END=$(date +%s)
 ELAPSED=$((END - START))
 echo
 echo "wall time ${ELAPSED}s for ${WINDOWS} windows: $((ELAPSED / WINDOWS))s per window"
-echo "at fd_batch ${FD_BATCH}. This is the throughput the projection needs, so record it."
+echo "at fd_batch ${FD_BATCH:-model default}. This is the throughput the projection needs, so record it."
 echo
 echo "=== stopping round ==="
 # Absolute before the cd: attack_core is only importable from the scripts repo, but the
