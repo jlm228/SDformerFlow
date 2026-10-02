@@ -3,6 +3,8 @@
 #
 #   bash hpc/submit_attack_sweep.sh <capture_dir>
 #   SMOKE=1 bash hpc/submit_attack_sweep.sh <capture_dir>     # 2 epsilons, 4 iters
+#   OBJECTIVES="epe_masked div_suppress" OVER_TOP=0 bash hpc/submit_attack_sweep.sh <capture_dir>
+#                                                    # a reduced sweep: two objectives, no 2x probe
 #
 # Submits one GPU array covering BOTH models x five objectives (10 tasks), then a CPU job
 # chained on --dependency=afterok that scores every cell and renders the figures.
@@ -85,8 +87,10 @@ fi
 # more damage rather than less. Multiplier is deliberately small: far outside the band the
 # attack stops steering the flow and simply destroys it, which tests nothing. Override
 # with EPS_HIGH_MULT.
+# OVER_TOP=0 drops it: the check needs running once, not on every capture of a reduced sweep.
 EPS_HUGE="$(python -c "import sys; print('%g' % (${EPS_HIGH_MULT:-2} * max(float(v) for v in sys.argv[1:])))" ${EPSILONS})"
-SWEEP_EPS="${EPSILONS} ${EPS_HUGE}"
+SWEEP_EPS="${EPSILONS}"
+[ "${OVER_TOP:-1}" = "0" ] || SWEEP_EPS="${EPSILONS} ${EPS_HUGE}"
 
 # SDA's last manifest column is not an epsilon: target mode carries tau factors, budget mode
 # event counts from `calibrate --events`. The 2x over-top probe does not apply to either.
@@ -173,17 +177,27 @@ for M in ${MODELS:-snn ann}; do
           esac
         done
       else
-        echo "${M} ${RUNID} random_sign  none      ${M_ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} epe_global   none      ${M_ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} epe_masked   none      ${M_ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          suppress  ${M_ATTACK} ${ITERS} ${RAMP}"
-        echo "${M} ${RUNID} div          inflate   ${M_ATTACK} ${ITERS} ${RAMP}"
-        # FGSM rows for the one-step-vs-iterative comparison, both signs. Skipped when
-        # ATTACK is already fgsm, which would duplicate the rows above.
-        if [ "${OPTIMISER}" != "fgsm" ]; then
-          echo "${M} ${RUNID} div          suppress  fgsm 1 ${RAMP}"
-          echo "${M} ${RUNID} div          inflate   fgsm 1 ${RAMP}"
-        fi
+        # OBJECTIVES picks a subset for a reduced sweep; unset, every objective runs.
+        for OBJ in ${OBJECTIVES:-random_sign epe_global epe_masked div_suppress div_inflate}; do
+          case "${OBJ}" in
+            random_sign)  echo "${M} ${RUNID} random_sign  none      ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            epe_global)   echo "${M} ${RUNID} epe_global   none      ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            epe_masked)   echo "${M} ${RUNID} epe_masked   none      ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            div_suppress) echo "${M} ${RUNID} div          suppress  ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            div_inflate)  echo "${M} ${RUNID} div          inflate   ${M_ATTACK} ${ITERS} ${RAMP}" ;;
+            *) echo "unknown objective '${OBJ}': use random_sign, epe_global, epe_masked, " \
+                    "div_suppress or div_inflate" >&2
+               exit 1 ;;
+          esac
+          # FGSM rows for the one-step-vs-iterative comparison, one per div sign that runs.
+          # Skipped when ATTACK is already fgsm, which would duplicate the rows above.
+          if [ "${OPTIMISER}" != "fgsm" ]; then
+            case "${OBJ}" in
+              div_suppress) echo "${M} ${RUNID} div          suppress  fgsm 1 ${RAMP}" ;;
+              div_inflate)  echo "${M} ${RUNID} div          inflate   fgsm 1 ${RAMP}" ;;
+            esac
+          fi
+        done
       fi
     } >> "${MANIFEST}"
   done <<EOF
