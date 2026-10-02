@@ -78,6 +78,10 @@ CLEAN="results/carla_eval/pred/${MODEL}"
 # OUT_ROOT lets a calibration run (hpc/submit_assg_grid.sh) keep its cells out of the sweep's
 # results/attack, which the sweep submitters clear and score.
 OUT="${OUT_ROOT:-results/attack}/${MODEL}"
+# One reports directory per capture. Report names carry model, label and epsilon but not the
+# capture, so captures sharing one directory overwrite each other's reports, and the round trip
+# below would check this capture's dumps against another capture's report.
+REPORTS="${OUT}/reports/${CAPTURE_ID}"
 LABEL="${OBJECTIVE}"
 [ "${OBJECTIVE}" = "div" ] && LABEL="div_${SIGN}"
 # The attack is part of the label: one manifest runs the same objective under both PGD
@@ -157,13 +161,13 @@ python carla_eval/attack_carla.py \
     ${LEVEL_ARGS} \
     --clean-pred "${CLEAN}" \
     --out "${OUT}" \
-    --report "${OUT}/reports" \
+    --report "${REPORTS}" \
     ${DUMP_ADV_TENSORS:+--dump-adv-tensors "${DUMP_ADV_TENSORS}/${MODEL}"}
 
 echo
 echo "=== round trip: does the dumped .npy carry the div the objective reported? ==="
 RT_FAIL=0
-for REPORT in "${OUT}/reports/"*_"${LABEL}"_eps*.json; do
+for REPORT in "${REPORTS}/"*_"${LABEL}"_eps*.json; do
     python carla_eval/attack_carla.py --model "${MODEL}" --runid "${RUNID}" \
         --tensors "${TENSORS}" --capture "${CAPTURE}" --id "${CAPTURE_ID}" \
         --objective "${OBJECTIVE}" --epsilons 0 --clean-pred "${CLEAN}" --out "${OUT}" \

@@ -11,7 +11,7 @@
 #
 # Pick A once every job has finished:
 #   cd ../CARLA-hpc-scripts && python -m attack_core.assg_grid \
-#       ../SDformerFlow/results/assg_grid/*/A*/snn/reports/*.json \
+#       ../SDformerFlow/results/assg_grid/*/A*/snn/reports/*/*.json \
 #       --out ../SDformerFlow/results/assg_grid/assg_A_snn.json
 
 set -euo pipefail
@@ -98,5 +98,5 @@ echo "submitted ${SUBMITTED} of ${#DIRS[@]} captures"
 [ -n "${SKIPPED}" ] && echo "skipped (no attack_band.json):${SKIPPED}"
 echo "when every job has finished, choose A with:"
 echo "  cd \${CARLA_SCRIPTS_ROOT:-../CARLA-hpc-scripts} && python -m attack_core.assg_grid \\"
-echo "      $(pwd)/${GRID_ROOT}/*/A*/snn/reports/*.json --out $(pwd)/${GRID_ROOT}/assg_A_snn.json"
+echo "      $(pwd)/${GRID_ROOT}/*/A*/snn/reports/*/*.json --out $(pwd)/${GRID_ROOT}/assg_A_snn.json"
 exit 0

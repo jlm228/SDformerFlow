@@ -83,7 +83,10 @@ for M in snn ann; do
             --condition clean --pred "${EPS_DIR}" --capture-id "${CAPTURE_ID}" --out "${RES}"
     done
 
-    cp -f "${ATTACK_ROOT}/reports/"*.json "${RES}/reports/" 2>/dev/null || true
+    # This capture's reports only: attack_carla.slurm writes each capture's under its own
+    # carla_<capture> directory, and sweep.py keys reports by (model, objective, epsilon), so
+    # another capture's report in ${RES}/reports would be joined to this capture's cases.
+    cp -f "${ATTACK_ROOT}/reports/carla_${SCEN}/"*.json "${RES}/reports/" 2>/dev/null || true
 done
 
 echo
