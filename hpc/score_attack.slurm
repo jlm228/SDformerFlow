@@ -77,6 +77,12 @@ for M in snn ann; do
         # eps 0 is the clean case and objective-independent; scoring it once per objective
         # would put five identical rows in sweep.csv.
         if [ "$(python -c "print(float('${EPS}') == 0)")" = "True" ]; then continue; fi
+        # Scores only directories holding this capture's predictions; directories from other
+        # captures' runs (a smoke test, an earlier sweep) are skipped.
+        if ! compgen -G "${EPS_DIR}${CAPTURE_ID}_[0-9][0-9][0-9][0-9].npy" > /dev/null; then
+            echo "  skip ${OBJECTIVE}/eps${EPS}: no ${CAPTURE_ID} predictions"
+            continue
+        fi
         CASE="${NAME}__${OBJECTIVE}__eps${EPS}"
         echo "  ${CASE}"
         python -m avoidance.eval.run_case --capture "${CAP_ABS}" --model "${CASE}" \
