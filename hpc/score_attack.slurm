@@ -35,7 +35,9 @@ SCEN="$(basename "${CAP_ABS}")"
 CAPTURE_ID="carla_${SCEN}"
 # Prefer the prefix the dumps actually carry, in case the capture was converted under
 # another one; run_case would otherwise assume "carla_<basename>".
-_PROBE="$(find "$(pwd)/results/carla_eval/pred" -name "*${SCEN}_[0-9][0-9][0-9][0-9].npy" 2>/dev/null | head -1)"
+# -print -quit stops at the first match. Piping to `head -1` instead lets head exit early, find
+# dies of SIGPIPE, and under pipefail that ends the whole job without a message.
+_PROBE="$(find "$(pwd)/results/carla_eval/pred" -name "*${SCEN}_[0-9][0-9][0-9][0-9].npy" -print -quit 2>/dev/null || true)"
 [ -n "${_PROBE}" ] && CAPTURE_ID="$(basename "${_PROBE}" .npy | sed "s/_[0-9]\{4\}$//")"
 REPO="$(pwd)"   # already cd'd to SLURM_SUBMIT_DIR; $0 is Slurm's spooled copy
 
