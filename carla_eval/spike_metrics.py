@@ -18,7 +18,6 @@ import os
 import sys
 import time
 
-import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -35,7 +34,7 @@ sys.path.insert(0, os.path.abspath(CARLA_SCRIPTS_ROOT))
 
 from snnmetrics.probe import SpikeProbe                             # noqa: E402
 from snnmetrics.cost import (footprint_bytes, connection_sparsity,  # noqa: E402
-                             write_csvs)
+                             wall_stats, write_csvs)
 
 
 def main():
@@ -112,7 +111,7 @@ def main():
             wall.append(time.perf_counter() - t0)
             probe.mark_window()
 
-    static["wall_ms_per_window"] = 1000.0 * float(np.mean(wall))
+    static.update(wall_stats(wall))
 
     if probe.nonbinary:
         print("\nWARNING: %d finite-threshold layer(s) emitted values outside {0, 1}; their "

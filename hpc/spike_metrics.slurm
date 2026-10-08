@@ -24,9 +24,12 @@ cd "${SLURM_SUBMIT_DIR:-.}"
 mkdir -p hpc/logs
 source hpc/env.sh
 
-USAGE="usage: sbatch hpc/spike_metrics.slurm <capture_dir> [windows]"
+USAGE="usage: sbatch hpc/spike_metrics.slurm <capture_dir> [windows] [extra args]"
 CAPTURE="${1:?${USAGE}}"
 WINDOWS="${2:-4}"
+# Passed through to the adapter, for --lenient or --channel-dim on a model whose neurons or
+# tensor layout this has not met before.
+EXTRA="${3:-}"
 
 CARLA_SCRIPTS_ROOT="${CARLA_SCRIPTS_ROOT:-../CARLA-hpc-scripts}"
 export CARLA_SCRIPTS_ROOT
@@ -63,13 +66,17 @@ mkdir -p "$(dirname "${TENSORS}")"
 echo
 
 rc=0
+ran=0
 for M in snn ann; do
     case "${M}" in
       snn) CONFIG=configs/valid_DSEC_supervised_full.yml; NAME=sdformerflow ;;
       ann) CONFIG=configs/valid_DSEC_ann.yml;             NAME=sttflownet_en4 ;;
     esac
     RUNID="$(cat "hpc/logs/${M}_runid.txt" 2>/dev/null || true)"
-    [ -n "${RUNID}" ] || { echo "no run id at hpc/logs/${M}_runid.txt"; exit 1; }
+    # Skip rather than abort: one model's numbers are still worth having, and killing the job
+    # would throw away the conversion done above.
+    [ -n "${RUNID}" ] || { echo "SKIP ${M}: no run id at hpc/logs/${M}_runid.txt"; continue; }
+    ran=1
 
     echo "--- ${M} (${NAME}) ---"
     python -u carla_eval/spike_metrics.py \
@@ -80,9 +87,11 @@ for M in snn ann; do
         --id "${CAPTURE_ID}" \
         --windows "${WINDOWS}" \
         --out "${OUT}" \
-        --name "${NAME}_$(basename "${CAPTURE}")" || { echo "${M} FAILED"; rc=1; }
+        --name "${NAME}_$(basename "${CAPTURE}")" ${EXTRA} || { echo "${M} FAILED"; rc=1; }
     echo
 done
+
+[ "${ran}" = "1" ] || { echo "no model ran: no run id under hpc/logs/" >&2; exit 1; }
 
 echo "Done (rc=${rc}). Metrics in ${OUT}:"
 ls -la "${OUT}"
