@@ -154,11 +154,26 @@ if [ -n "${TIME}" ]; then SB_TIME="--time=${TIME}"; fi
 # Two processes are the most an 80 GB A100 holds: each SNN attack peaks at ~26 GB, and three
 # went out of memory. CPU and host memory scale with the pack, at the per-process figures the
 # slurm header gives one line.
-PACK="${PACK:-2}"
+# Except under ASSG: its moments (M, D per neuron per time step) take the SNN to 39.5 GB, and two
+# of those went out of memory on the 016 smoke run. So ASSG on the SNN runs one per GPU.
+SURR="${ATTACK#*-}"
+ASSG_SNN=0
+case "${SURR}" in
+  assg|assgs) case " ${MODELS:-snn ann} " in *" snn "*) ASSG_SNN=1 ;; esac ;;
+esac
+if [ "${ASSG_SNN}" = "1" ]; then
+  PACK="${PACK:-1}"
+  [ "${PACK}" = "1" ] || {
+    echo "PACK=${PACK} with ${ATTACK} on the SNN: two ASSG processes need ~79 GB and do not" >&2
+    echo "fit on an 80 GB A100. Use PACK=1." >&2; exit 1; }
+else
+  PACK="${PACK:-2}"
+fi
 case "${PACK}" in
   1|2) ;;
   *) echo "PACK must be 1 or 2, got '${PACK}' (three processes do not fit on 80 GB)" >&2; exit 1 ;;
 esac
+echo "PACK=${PACK} (manifest lines per GPU)"
 SB_RES="--cpus-per-task=$((4 * PACK)) --mem=$((64 * PACK))G"
 
 # Named by attack as well as capture: array tasks read their line when they START, so a second
