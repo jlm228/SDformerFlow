@@ -279,6 +279,10 @@ def main():
                     help="also write the perturbed INPUT tensors. The SNN and ANN consume "
                          "byte-identical voxels, so these transfer cleanly between them -- "
                          "that is Stage 6's transfer check")
+    ap.add_argument("--spike-metrics", default=None, metavar="DIR",
+                    help="also record spike and operation counts on each band window's scoring "
+                         "pass, one record per epsilon, as carla_eval/spike_metrics.py does on "
+                         "clean windows. Not for SDA")
     ap.add_argument("--carla-scripts", default=None)
     ap.add_argument("--round-trip", default=None, metavar="REPORT_JSON")
     args = ap.parse_args()
@@ -477,6 +481,18 @@ def main():
         level_name = "epsilons"
     print("%s: %s" % (level_name, " ".join("%g" % v for v in levels)))
 
+    # One probe per epsilon, attached by the runner around each band window's scoring forward
+    # only: the same reset-then-forward spike_metrics.py measures on clean windows, so the two
+    # read against each other. Not strict about binary outputs: a surprise there should be
+    # recorded in the output, not end a many-hour attack at its first window.
+    probes = None
+    if args.spike_metrics and args.attack == "sda":
+        print("--spike-metrics is not wired into SDA; ignored")
+    elif args.spike_metrics:
+        from snnmetrics.probe import SpikeProbe
+        probes = {float(e): SpikeProbe(model.net, strict_binary=False) for e in levels}
+        print("spike metrics -> %s" % args.spike_metrics)
+
     if args.sda_fd_batch is None:
         args.sda_fd_batch = 1 if args.model == "snn" else 4
     if args.attack == "sda" and args.model == "snn" and args.sda_fd_batch > 1:
@@ -544,7 +560,8 @@ def main():
             dump_adv_tensors=args.dump_adv_tensors,
             bin_layout=bin_layout, surrogate_ctx=handle,
             rhos=args.rhos, scene_mass=args.scene_mass,
-            rand_init=not args.no_rand_init, random_sign_fn=random_sign_fn)
+            rand_init=not args.no_rand_init, random_sign_fn=random_sign_fn,
+            eval_probes=probes)
     finally:
         # Must run even when the attack raises, or a failed window leaves the adaptive
         # surrogate, or the per-sample norm wrappers, installed for whatever runs next.
@@ -565,6 +582,38 @@ def main():
     print("\nreports:")
     for level in levels:
         print("  %s" % paths[level])
+
+    if probes:
+        # The attack's dumps and reports are already written. A failure past this point loses
+        # the spike counts only, so it is reported loudly but does not fail the line, which
+        # would skip its round trip and mark hours of valid results as failed.
+        try:
+            write_spike_metrics(args, probes, reports, label, lo, hi, model, runner)
+        except Exception as e:                                          # noqa: BLE001
+            print("\nWARNING: spike metrics NOT written (%s: %s); the attack results are "
+                  "unaffected" % (type(e).__name__, e))
+
+
+def write_spike_metrics(args, probes, reports, label, lo, hi, model, runner):
+    """One record and its CSVs per epsilon, in the layout carla_eval/spike_metrics.py writes."""
+    from snnmetrics.cost import write_csvs
+    print("\nspike metrics:")
+    for eps, probe in probes.items():
+        rep = reports[eps]
+        # Named like the report, so each epsilon's counts pair with its outcome row.
+        name = "%s_%s_%s" % (rep["model"], rep["label"], runner.eps_tag(eps))
+        meta = {"capture_id": args.id, "label": rep["label"], "epsilon": eps,
+                "objective": args.objective, "sign": rep["sign"], "attack": label,
+                "band_lo": lo, "band_hi": hi, "spiking": bool(model.spiking),
+                "runid": args.runid, "norm_set": args.norm_set,
+                "pass": "clean" if eps == 0.0 else "adversarial"}
+        path = probe.dump(os.path.join(args.spike_metrics, name + "_spikes.json"), meta=meta)
+        with open(path) as fh:
+            write_csvs(name, json.load(fh), args.spike_metrics, extra=meta)
+        if probe.nonbinary:
+            print("  WARNING: %d layer(s) emitted values outside {0, 1} at eps %g"
+                  % (len(probe.nonbinary), eps))
+        print("  %s" % path)
 
 
 if __name__ == "__main__":

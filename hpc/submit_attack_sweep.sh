@@ -5,6 +5,10 @@
 #   SMOKE=1 bash hpc/submit_attack_sweep.sh <capture_dir>     # 2 epsilons, 4 iters
 #   OBJECTIVES="epe_masked div_suppress" OVER_TOP=0 bash hpc/submit_attack_sweep.sh <capture_dir>
 #                                                    # a reduced sweep: two objectives, no 2x probe
+#   PACK=1 bash hpc/submit_attack_sweep.sh <capture_dir>   # one manifest line per GPU, as before
+#
+# PACK (default 2) manifest lines share each GPU: 1.27x the throughput of one per GPU, measured
+# by hpc/pack_probe.slurm. See attack_carla.slurm.
 #
 # Submits one GPU array covering BOTH models x five objectives (10 tasks), then a CPU job
 # chained on --dependency=afterok that scores every cell and renders the figures.
@@ -141,12 +145,26 @@ else
   RAMPS="${SWEEP_EPS}"
 fi
 
-# Per-submission override of the slurm header's --time.
+# Per-submission override of the slurm header's --time. Packed lines each run ~1.6x slower than
+# alone, so a TIME or EPS_CHUNK sized for one line per GPU needs that headroom.
 TIME="${TIME:-}"
 SB_TIME=""
 if [ -n "${TIME}" ]; then SB_TIME="--time=${TIME}"; fi
 
-MANIFEST="hpc/logs/attack_grid_$(basename "${CAPTURE}").txt"
+# Two processes are the most an 80 GB A100 holds: each SNN attack peaks at ~26 GB, and three
+# went out of memory. CPU and host memory scale with the pack, at the per-process figures the
+# slurm header gives one line.
+PACK="${PACK:-2}"
+case "${PACK}" in
+  1|2) ;;
+  *) echo "PACK must be 1 or 2, got '${PACK}' (three processes do not fit on 80 GB)" >&2; exit 1 ;;
+esac
+SB_RES="--cpus-per-task=$((4 * PACK)) --mem=$((64 * PACK))G"
+
+# Named by attack as well as capture: array tasks read their line when they START, so a second
+# submission on the same capture (sapgd-pdsg after sapgd-assg) must not overwrite a manifest
+# whose tasks are still queued.
+MANIFEST="hpc/logs/attack_grid_$(basename "${CAPTURE}")_${ATTACK}.txt"
 : > "${MANIFEST}"
 for M in ${MODELS:-snn ann}; do
   RUNID="${SNN_RUNID}"; [ "${M}" = "ann" ] && RUNID="${ANN_RUNID}"
@@ -204,9 +222,16 @@ for M in ${MODELS:-snn ann}; do
 ${M_RAMPS}
 EOF
 done
+# Cheap lines last. A packed task runs consecutive lines together, so an FGSM row (one step) or a
+# random_sign row (no steps) between two iterative rows would pair with one of them, finish in
+# minutes, and leave it running alone for hours. Order within each group is kept.
+awk '!($3 == "random_sign" || $5 == "fgsm")' "${MANIFEST}" > "${MANIFEST}.tmp"
+awk '($3 == "random_sign" || $5 == "fgsm")' "${MANIFEST}" >> "${MANIFEST}.tmp"
+mv "${MANIFEST}.tmp" "${MANIFEST}"
 N=$(wc -l < "${MANIFEST}")
+TASKS=$(( (N + PACK - 1) / PACK ))
 
-echo "manifest  ${MANIFEST} (${N} tasks)"
+echo "manifest  ${MANIFEST} (${N} lines, ${TASKS} GPU task(s) at PACK=${PACK})"
 sed 's/^/    /' "${MANIFEST}"
 echo
 
@@ -217,10 +242,10 @@ echo
 # window, so this is opt-in: set DUMP_ADV_TENSORS to a path to turn it on.
 DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS:-}"
 
-ARRAY_ID=$(sbatch --parsable --array=1-"${N}" ${SB_TIME} \
-    --export=ALL,RAND_INIT="${RAND_INIT}",ASSG_A="${ASSG_A:-}",SDA_MODE="${SDA_MODE:-}",SDA_DIRECTIONS="${SDA_DIRECTIONS:-}",SDA_RANK="${SDA_RANK:-}",SDA_K_INIT="${SDA_K_INIT:-}",SDA_FD_BATCH="${SDA_FD_BATCH:-}",SDA_EPE_MARGIN="${SDA_EPE_MARGIN:-}",NORM_SET="${NORM_SET:-}",DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS}" \
+ARRAY_ID=$(sbatch --parsable --array=1-"${TASKS}" ${SB_TIME} ${SB_RES} \
+    --export=ALL,PACK="${PACK}",SPIKE_METRICS="${SPIKE_METRICS:-1}",OUT_ROOT="${OUT_ROOT:-}",RAND_INIT="${RAND_INIT}",ASSG_A="${ASSG_A:-}",SDA_MODE="${SDA_MODE:-}",SDA_DIRECTIONS="${SDA_DIRECTIONS:-}",SDA_RANK="${SDA_RANK:-}",SDA_K_INIT="${SDA_K_INIT:-}",SDA_FD_BATCH="${SDA_FD_BATCH:-}",SDA_EPE_MARGIN="${SDA_EPE_MARGIN:-}",NORM_SET="${NORM_SET:-}",DUMP_ADV_TENSORS="${DUMP_ADV_TENSORS}" \
     hpc/attack_carla.slurm "${CAPTURE}" "${MANIFEST}")
-echo "attack array : job ${ARRAY_ID} (1-${N})"
+echo "attack array : job ${ARRAY_ID} (1-${TASKS})"
 
 # afterany, not afterok: one failed cell must not block scoring and figures for the
 # rest. sweep.py reports what is missing.
@@ -241,4 +266,5 @@ if [ "${KEEP_TENSORS:-0}" != "1" ]; then
 fi
 echo
 echo "Watch with: squeue --me"
-echo "A failed cell reruns alone: sbatch --array=<index> hpc/attack_carla.slurm ${CAPTURE} ${MANIFEST}"
+echo "A failed cell reruns alone, by its MANIFEST LINE (PACK unset means one line per task):"
+echo "  sbatch --array=<line> hpc/attack_carla.slurm ${CAPTURE} ${MANIFEST}"
