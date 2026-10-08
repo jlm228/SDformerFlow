@@ -66,8 +66,12 @@ CAPTURE_ID="carla_$(basename "${CAPTURE}")"
 CLEAN="results/carla_eval/pred/snn"
 [ -d "${CLEAN}" ] || { echo "no clean predictions at ${CLEAN}" >&2; exit 1; }
 
-SCRATCH="${TMPDIR:-/tmp}/sdf_pack_probe_${SLURM_JOB_ID:-$$}"
+# On project storage, not $TMPDIR: the node-local space cannot hold the ~1.1 GB conversion plus
+# a seeded copy of the clean predictions per process. PROBE_SCRATCH moves it elsewhere.
+SCRATCH="${PROBE_SCRATCH:-hpc/pack_probe_scratch}/${SLURM_JOB_ID:-$$}"
 mkdir -p "${SCRATCH}"
+SCRATCH="$(cd "${SCRATCH}" && pwd)"
+echo "scratch ${SCRATCH} (removed at exit)"
 trap 'rm -rf "${SCRATCH}"' EXIT
 
 # The sweep converts each capture on demand and removes the tensors afterwards, so they are

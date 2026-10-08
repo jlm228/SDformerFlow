@@ -16,5 +16,6 @@ output/
 
 # Slurm job logs and the chained-run id handoff files.
 hpc/logs/
+hpc/pack_probe_scratch/
 
 .DS_Store
