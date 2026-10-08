@@ -2,15 +2,18 @@
 # How many SA-PGD attack processes one GPU can usefully run at once.
 #
 #   sbatch hpc/pack_probe.slurm <capture_dir> [band_lo]
-#   PACKS="1 2 3" WINDOWS=4 ITERS=50 ATTACK=sapgd-pdsg sbatch hpc/pack_probe.slurm <capture_dir>
+#   sbatch --export=ALL,PACKS="1 2 3",ITERS=50 hpc/pack_probe.slurm <capture_dir>
+#
+# Settings go through --export on the command line: this cluster does not pass a plain
+# `VAR=x sbatch ...` through to the job (see attack_carla.slurm).
 #   sbatch --gres=gpu:a100_40:1 hpc/pack_probe.slurm <capture_dir>     # the same on a 40 GB card
 #
 # The SNN cannot batch (window_partition_v2 couples the copies in a batch, see attack_carla.py),
 # so at batch 1 the GPU may sit idle between the torch backend's small per-time-step kernels.
 # Running P independent attacks side by side fills those gaps if there are any. Each phase runs
 # P copies of the SAME short attack (WINDOWS windows x ITERS steps x 1 epsilon) concurrently and
-# times the attack itself, from the band line to the reports line, so model loading and seeding
-# do not count. If MPS is available, the largest P runs a second time under it.
+# times the attack itself, from the last "clean predictions seeded" line to the reports line, so
+# model loading and copying the clean predictions onto the output directory do not count. If MPS is available, the largest P runs a second time under it.
 #
 # Read the summary at the end: aggregate passes/s against P = 1 is the speed-up packing gives.
 # Nothing is written under results/ or captures/: the converted tensors (when the capture has
@@ -72,7 +75,15 @@ SCRATCH="${PROBE_SCRATCH:-hpc/pack_probe_scratch}/${SLURM_JOB_ID:-$$}"
 mkdir -p "${SCRATCH}"
 SCRATCH="$(cd "${SCRATCH}" && pwd)"
 echo "scratch ${SCRATCH} (removed at exit)"
-trap 'rm -rf "${SCRATCH}"' EXIT
+# The per-process logs are kept in hpc/logs, so the timings can be re-read after the scratch goes.
+KEEP="hpc/logs/pack_probe_${SLURM_JOB_ID:-$$}"
+trap 'mkdir -p "${KEEP}"; cp "${SCRATCH}"/*.log "${SCRATCH}"/*.dmon "${KEEP}"/ 2>/dev/null || true;
+      rm -rf "${SCRATCH}"' EXIT
+
+# Less memory lost to the caching allocator's fragmentation, which is what stopped a third
+# process fitting on 80 GB (each held ~27.6 GB for ~23.2 GB in use). Allocator only; the
+# arithmetic is unchanged.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # The sweep converts each capture on demand and removes the tensors afterwards, so they are
 # usually not there. Reuse them if a running sweep left them; otherwise convert into scratch,
@@ -121,8 +132,10 @@ run_one() {
 }
 
 attack_span() {
-  # Seconds from the band line (printed just before the sweep starts) to the reports line.
-  awk '/\| band \[/ && !s {s=$1} /^[0-9.]+ reports:/ {e=$1} END {if (s && e) printf "%.1f", e-s; else print "NA"}' "$1"
+  # Seconds from the last seeding line (the sweep starts right after it) to the reports line.
+  # Falls back to the band line, printed before seeding, if the seeding lines ever change.
+  awk '/\| band \[/ && !b {b=$1} /clean predictions seeded\)/ {s=$1} /^[0-9.]+ reports:/ {e=$1}
+       END {if (!s) s=b; if (s && e) printf "%.1f", e-s; else print "NA"}' "$1"
 }
 
 declare -A RESULT
@@ -205,6 +218,9 @@ for name in "${ORDER[@]}"; do
   [ -n "${BASE}" ] && speed="$(awk -v r="${rate}" -v b="${BASE}" 'BEGIN {printf "%.2fx", r / b}')"
   printf "%-8s %4s %10s %12s %9s  %s\n" "${name}" "${p}" "${span}" "${rate}" "${speed}" "${rest}"
 done
+[ -n "${BASE}" ] && awk -v r="${BASE}" 'BEGIN {printf "
+one process: %.3f s per pass (attack_core/cost.py assumes 0.330)
+", 1 / r}'
 echo
 echo "'vs P=1' is the throughput gain per GPU from packing; multiply GPU-hour estimates by its"
 echo "inverse. A FAILED phase at the top P is most likely out of memory."
