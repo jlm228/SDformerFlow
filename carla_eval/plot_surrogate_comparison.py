@@ -26,9 +26,9 @@ from matplotlib.lines import Line2D                                   # noqa: E4
 from matplotlib.patches import Patch                                  # noqa: E402
 from matplotlib.ticker import NullFormatter, NullLocator, PercentFormatter  # noqa: E402
 
-# Line style, marker, bar hatch and name per surrogate.
-SURROGATES = {"assg": ("-", "o", "", "ASSG"), "pdsg": ("--", "s", "//", "PDSG"),
-              "native": (":", "^", "..", "native ATan")}
+# Line style, bar hatch and name per surrogate.
+SURROGATES = {"assg": ("-", "", "ASSG"), "pdsg": ("--", "//", "PDSG"),
+              "native": (":", "..", "native ATan")}
 EPS_COLOURS = ["#0d0887", "#cc4778", "#f89540", "#7e03a8"]
 # Length of one inference window. Flow is in pixels per window, so divergence comes out in
 # 1/window; dividing by this puts it in 1/s.
@@ -45,7 +45,7 @@ SHARED_Y = ("div_suppress", "div_inflate")
 
 
 def style(sg):
-    return SURROGATES.get(sg, ("-.", "D", "xx", sg))
+    return SURROGATES.get(sg, ("-.", "xx", sg))
 
 
 def objective_meta(obj):
@@ -80,7 +80,7 @@ def log_budget_axis(ax, percents):
     ax.set_xticklabels(["%g" % p for p in percents])
     ax.xaxis.set_minor_locator(NullLocator())
     ax.xaxis.set_minor_formatter(NullFormatter())
-    ax.set_xlabel("% of scene events injected")
+    ax.set_xlabel("budget (% of scene events injected)")
 
 
 def main():
@@ -102,27 +102,34 @@ def main():
     eps = list(zip(args.epsilons, args.percents))
     rows = sweep_rows(args.results_root, args.scenarios, args.model)
     n_obj = len(args.objectives)
-    names = " vs ".join(style(s)[3] for s in args.surrogates)
+    names = " vs ".join(style(s)[2] for s in args.surrogates)
     scen = " ".join(args.scenarios)
 
     # -------------------------------------------------------------------- main figure
     fig, ax = plt.subplots(2, n_obj, figsize=(4.6 * n_obj, 7.4), squeeze=False)
     for j, obj in enumerate(args.objectives):
         title, y_label, scale = objective_meta(obj)
-        for sg in args.surrogates:
-            ls, marker, _hatch, _name = style(sg)
+        for m, sg in enumerate(args.surrogates):
+            ls = style(sg)[0]
+            # Surrogates sit either side of each budget so their dots do not overlap.
+            nudge = 1.0 + 0.06 * (m - (len(args.surrogates) - 1) / 2.0)
 
-            # Strength: median, over every window of every scenario, of the best J reached.
+            # Strength: each scenario a dot, the median over its windows of the best J reached;
+            # the line joins the medians across scenarios, so every scenario weighs the same.
             xs, ys = [], []
             for k, (tag, pct) in enumerate(eps):
-                best = [max(w["loss_history"]) for s in args.scenarios
-                        for w in windows_of(args.attack_root, s, obj, sg, tag) if w["loss_history"]]
-                if best:
-                    xs.append(pct)
-                    ys.append(scale * np.median(best))
-                    ax[0, j].plot(pct, ys[-1], marker, color=EPS_COLOURS[k % 4], mec="0.2",
-                                  ms=7, zorder=3)
-            ax[0, j].plot(xs, ys, ls=ls, color="0.25", lw=1.4, zorder=2)
+                per = [scale * np.median(best) for best in
+                       ([max(w["loss_history"]) for w in windows_of(args.attack_root, s, obj, sg, tag)
+                         if w["loss_history"]] for s in args.scenarios) if best]
+                if not per:
+                    continue
+                x = pct * nudge
+                ax[0, j].scatter([x] * len(per), per, s=16, color=EPS_COLOURS[k % 4], alpha=0.4,
+                                 lw=0, zorder=2)
+                xs.append(x)
+                ys.append(float(np.median(per)))
+                ax[0, j].plot(x, ys[-1], "o", color=EPS_COLOURS[k % 4], mec="0.2", ms=7, zorder=4)
+            ax[0, j].plot(xs, ys, ls=ls, color="0.25", lw=1.4, zorder=3)
 
         # Outcome: share of scenarios per tier, a bar per surrogate, clean first for reference.
         groups = [("clean", None)] + [("%g %%" % pct, tag) for tag, pct in eps]
@@ -141,7 +148,7 @@ def main():
                     share = tiers.count(t) / float(len(tiers))
                     ax[1, j].bar(x, share, width=0.5 if tag is None else width, bottom=bottom,
                                  color=col, edgecolor="0.25", lw=0.6,
-                                 hatch="" if sg is None else style(sg)[2])
+                                 hatch="" if sg is None else style(sg)[1])
                     bottom += share
         ax[1, j].set_xticks(range(len(groups)))
         ax[1, j].set_xticklabels([g[0] for g in groups])
@@ -150,7 +157,7 @@ def main():
         ax[1, j].set_xlabel("budget (% of scene events injected)")
 
         ax[0, j].set_title(title, fontweight="bold")
-        ax[0, j].set_ylabel("attacked " + y_label)
+        ax[0, j].set_ylabel("median attacked " + y_label)
         ax[1, j].set_ylabel("share of scenarios (%)")
         log_budget_axis(ax[0, j], args.percents)
         ax[0, j].axhline(0.0, color="0.6", lw=0.8)
@@ -163,17 +170,19 @@ def main():
         for j in shared:
             ax[0, j].set_ylim(-top, top)
 
-    handles = [Line2D([], [], color="0.25", ls=style(sg)[0], marker=style(sg)[1], lw=1.6,
-                      label=style(sg)[3]) for sg in args.surrogates]
+    handles = [Line2D([], [], color="0.25", ls=style(sg)[0], lw=1.6,
+                      label=style(sg)[2]) for sg in args.surrogates]
     handles += [Line2D([], [], color=EPS_COLOURS[k % 4], marker="o", ls="none", ms=7,
                        label="%g %%" % pct) for k, (_t, pct) in enumerate(eps)]
+    handles += [Line2D([], [], color="0.5", marker="o", ls="none", ms=4, alpha=0.5,
+                       label="one scenario")]
     # The legend fills column by column, two rows deep: pad the budgets to an even count so
     # each group starts a fresh column and the bar keys sit together.
     if len(handles) % 2:
         handles.append(Line2D([], [], ls="none", label=""))
     handles += [Patch(facecolor=col, edgecolor="0.25", label=name) for _t, name, col in TIERS]
-    handles += [Patch(facecolor="white", edgecolor="0.25", hatch=style(sg)[2],
-                      label="%s (bar)" % style(sg)[3]) for sg in args.surrogates]
+    handles += [Patch(facecolor="white", edgecolor="0.25", hatch=style(sg)[1],
+                      label="%s (bar)" % style(sg)[2]) for sg in args.surrogates]
     fig.legend(handles=handles, loc="lower center", ncol=(len(handles) + 1) // 2, frameon=False,
                fontsize=8)
     fig.suptitle("%s: %s, scenarios %s" % (args.model, names, scen))
@@ -197,7 +206,7 @@ def main():
         ax[0, j].set_title(title, fontweight="bold")
         ax[0, j].set_xlabel("SA-PGD iteration")
         ax[0, j].set_ylabel("median attacked " + y_label)
-    handles = [Line2D([], [], color="0.25", ls=style(sg)[0], lw=1.6, label=style(sg)[3])
+    handles = [Line2D([], [], color="0.25", ls=style(sg)[0], lw=1.6, label=style(sg)[2])
                for sg in args.surrogates]
     handles += [Line2D([], [], color=EPS_COLOURS[k % 4], lw=2.5, label="%g %%" % pct)
                 for k, (_t, pct) in enumerate(eps)]
