@@ -29,8 +29,9 @@ from matplotlib.ticker import NullFormatter, NullLocator, PercentFormatter  # no
 # Line style, bar hatch and name per surrogate.
 SURROGATES = {"assg": ("-", "", "ASSG"), "pdsg": ("--", "//", "PDSG"),
               "native": (":", "..", "native ATan")}
-# Marker for each surrogate's scenario dots, which sit too close for line style to tell apart.
-DOT_MARKERS = {"assg": "o", "pdsg": "s", "native": "^"}
+# Marker for each surrogate's medians and scenario dots; the dots sit too close for line style
+# to tell apart.
+MARKERS = {"assg": "o", "pdsg": "s", "native": "^"}
 EPS_COLOURS = ["#0d0887", "#cc4778", "#f89540", "#7e03a8"]
 # Length of one inference window. Flow is in pixels per window, so divergence comes out in
 # 1/window; dividing by this puts it in 1/s.
@@ -127,11 +128,11 @@ def main():
                 if not per:
                     continue
                 ax[0, j].scatter([pct * nudge] * len(per), per, s=16, color=EPS_COLOURS[k % 4],
-                                 marker=DOT_MARKERS.get(sg, "D"), alpha=0.4, lw=0, zorder=2)
+                                 marker=MARKERS.get(sg, "D"), alpha=0.4, lw=0, zorder=2)
                 xs.append(pct)
                 ys.append(float(np.median(per)))
-                ax[0, j].plot(pct, ys[-1], "o", color=EPS_COLOURS[k % 4], mec="0.2", ms=7,
-                              zorder=4)
+                ax[0, j].plot(pct, ys[-1], MARKERS.get(sg, "D"), color=EPS_COLOURS[k % 4],
+                              mec="0.2", ms=7, zorder=4)
             ax[0, j].plot(xs, ys, ls=ls, color="0.25", lw=1.4, zorder=3)
 
         # Outcome: share of scenarios per tier, a bar per surrogate, clean first for reference.
@@ -175,10 +176,9 @@ def main():
 
     handles = [Line2D([], [], color="0.25", ls=style(sg)[0], lw=1.6,
                       label=style(sg)[2]) for sg in args.surrogates]
-    handles += [Line2D([], [], color="0.6", marker="o", mec="0.2", ls="none", ms=7,
-                       label="median"),
-                Line2D([], [], ls="none", label="")]
-    handles += [Line2D([], [], color="0.5", marker=DOT_MARKERS.get(sg, "D"), ls="none", ms=4,
+    handles += [Line2D([], [], color="0.6", marker=MARKERS.get(sg, "D"), mec="0.2", ls="none",
+                       ms=7, label="median, %s" % style(sg)[2]) for sg in args.surrogates]
+    handles += [Line2D([], [], color="0.5", marker=MARKERS.get(sg, "D"), ls="none", ms=4,
                        alpha=0.5, label="one scenario, %s" % style(sg)[2])
                 for sg in args.surrogates]
     # The legend fills column by column, two rows deep: pad the budgets to an even count so
