@@ -1,12 +1,12 @@
-"""Compare SA-PGD surrogate gradients on the SNN: attack strength, TTC error, planner outcome.
+"""Compare SA-PGD surrogate gradients on the SNN: attack strength, perceived approach, outcome.
 
     python carla_eval/plot_surrogate_comparison.py
     python carla_eval/plot_surrogate_comparison.py --scenarios 021 023 --surrogates assg pdsg
 
 Writes two figures:
 
-    <out>                  one column per objective; rows: the median best loss J, the TTC
-                           error across the attacked band, and the share of scenarios in each
+    <out>                  one column per objective; rows: the median best loss J, the inverse
+                           TTC ratio across the attacked band, and the share of scenarios in each
                            outcome tier, all against the epsilon budget
     <out>_convergence.png  the median loss against SA-PGD iteration, every budget
 
@@ -24,7 +24,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                       # noqa: E402
 from matplotlib.lines import Line2D                                   # noqa: E402
 from matplotlib.patches import Patch                                  # noqa: E402
-from matplotlib.ticker import NullFormatter, NullLocator              # noqa: E402
+from matplotlib.ticker import FormatStrFormatter, NullFormatter, NullLocator  # noqa: E402
 
 # Line style, marker, bar hatch and name per surrogate.
 SURROGATES = {"assg": ("-", "o", "", "ASSG"), "pdsg": ("--", "s", "//", "PDSG"),
@@ -36,8 +36,9 @@ OBJECTIVES = {"div_suppress": ("Suppress divergence", "J = -divergence (1/window
               "epe_masked": ("Masked EPE", "J = EPE on hazard (px)")}
 TIERS = [(0, "avoided, no braking", "#1a9850"), (1, "avoided with braking", "#91cf60"),
          (2, "emergency braking", "#fc8d59"), (3, "collided", "#d73027")]
-# TTC error is drawn up to this, in %. A divergence that flipped sign reads tau as infinite.
-TTC_CAP = 300.0
+RATIO_TICKS = [-50, -10, -5, -2, -1, -0.5, 0, 0.5, 1, 2, 5, 10, 20, 50, 100]
+# Columns that share y-limits in the strength and perception rows (same units).
+SHARED_Y = ("div_suppress", "div_inflate")
 
 
 def style(sg):
@@ -66,13 +67,13 @@ def sweep_rows(results_root, scenarios, model):
     return out
 
 
-def ttc_error_pct(row):
-    """Band-median TTC error, %. tau = 2/div, so tau_adv/tau_clean = 1/median div ratio."""
+def inverse_ttc_ratio(row):
+    """Band-median 1/tau attacked over 1/tau clean. 1/tau = div/2, so this is the div ratio:
+    1 no effect, 0 no approach perceived, negative the hazard seems to recede, above 1 closer."""
     try:
-        ratio = float(row["median_div_ratio_band"])
+        return float(row["median_div_ratio_band"])
     except (KeyError, ValueError):
         return None
-    return np.inf if ratio <= 0.0 else 100.0 * (1.0 / ratio - 1.0)
 
 
 def log_budget_axis(ax, percents):
@@ -126,18 +127,18 @@ def main():
                                   ms=7, zorder=3)
             ax[0, j].plot(xs, ys, ls=ls, color="0.25", lw=1.4, zorder=2)
 
-            # TTC error: each scenario a dot, the median across scenarios a line.
+            # Perceived approach: each scenario a dot, the median across scenarios a line.
             xs, ys = [], []
             for k, (tag, pct) in enumerate(eps):
-                errs = [e for e in (ttc_error_pct(r)
+                vals = [v for v in (inverse_ttc_ratio(r)
                                     for r in rows.get((label, round(float(tag), 5)), []))
-                        if e is not None]
-                if not errs:
+                        if v is not None]
+                if not vals:
                     continue
-                ax[1, j].scatter([pct] * len(errs), np.minimum(errs, TTC_CAP), s=14,
-                                 color=EPS_COLOURS[k % 4], marker=marker, alpha=0.45, zorder=2)
+                ax[1, j].scatter([pct] * len(vals), vals, s=14, color=EPS_COLOURS[k % 4],
+                                 marker=marker, alpha=0.45, zorder=2)
                 xs.append(pct)
-                ys.append(min(float(np.median(errs)), TTC_CAP))
+                ys.append(float(np.median(vals)))
             ax[1, j].plot(xs, ys, ls=ls, color="0.25", lw=1.6, zorder=3)
 
         # Outcome: share of scenarios per tier, a bar per surrogate, clean first for reference.
@@ -166,15 +167,32 @@ def main():
 
         ax[0, j].set_title(title, fontweight="bold")
         ax[0, j].set_ylabel("median best " + j_label)
-        ax[1, j].set_ylabel("TTC error across band (%)")
+        ax[1, j].set_ylabel("inverse TTC, attacked / clean")
         ax[2, j].set_ylabel("share of scenarios")
         log_budget_axis(ax[0, j], args.percents)
         log_budget_axis(ax[1, j], args.percents)
-        ax[1, j].axhline(0.0, color="0.5", lw=0.8)
-        ax[1, j].axhline(TTC_CAP, color="0.7", lw=0.8, ls=":")
-        ax[1, j].text(args.percents[0], TTC_CAP, " capped (tau read as infinite)",
-                      fontsize=7, color="0.4", va="bottom")
-        ax[1, j].set_ylim(-100, TTC_CAP * 1.12)
+        ax[1, j].set_yscale("symlog", linthresh=1.0)
+        ax[1, j].axhline(1.0, color="0.5", lw=0.8)
+        ax[1, j].axhline(0.0, color="0.5", lw=0.8, ls=":")
+        ax[1, j].text(1.0, 1.0, "no effect ", transform=ax[1, j].get_yaxis_transform(),
+                      fontsize=7, color="0.4", ha="right", va="bottom")
+        ax[1, j].text(1.0, 0.0, "no approach seen ", transform=ax[1, j].get_yaxis_transform(),
+                      fontsize=7, color="0.4", ha="right", va="bottom")
+
+    # The divergence columns share units, so they share y-limits too.
+    shared = [j for j, o in enumerate(args.objectives) if o in SHARED_Y]
+    for i in (0, 1):
+        if len(shared) > 1:
+            lo = min(ax[i, j].get_ylim()[0] for j in shared)
+            hi = max(ax[i, j].get_ylim()[1] for j in shared)
+            for j in shared:
+                ax[i, j].set_ylim(lo, hi)
+    # Plain-number ticks on the symmetric-log axis, whichever fall inside each panel.
+    for j in range(n_obj):
+        lo, hi = ax[1, j].get_ylim()
+        ax[1, j].set_yticks([t for t in RATIO_TICKS if lo <= t <= hi])
+        ax[1, j].yaxis.set_major_formatter(FormatStrFormatter("%g"))
+        ax[1, j].yaxis.set_minor_locator(NullLocator())
 
     handles = [Line2D([], [], color="0.25", ls=style(sg)[0], marker=style(sg)[1], lw=1.6,
                       label=style(sg)[3]) for sg in args.surrogates]
