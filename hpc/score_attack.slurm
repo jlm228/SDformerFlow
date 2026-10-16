@@ -29,6 +29,7 @@ mkdir -p hpc/logs
 USAGE="usage: sbatch hpc/score_attack.slurm <capture_dir>"
 CAPTURE="${1:?${USAGE}}"
 CARLA_SCRIPTS_ROOT="${CARLA_SCRIPTS_ROOT:-../CARLA-hpc-scripts}"
+REDO="${REDO:-0}" # REDO=1    re-score the controls and clean anchors already present (default: skip)
 
 CAP_ABS="$(cd "${CAPTURE}" && pwd)"
 SCEN="$(basename "${CAP_ABS}")"
@@ -50,7 +51,7 @@ mkdir -p "${RES}/reports"
 # what deviation is measured against). Both are idempotent, and OF_EV_SNN's scoring job may
 # have written them already.
 for COND in no_action gt_oracle; do
-    if [ ! -f "${RES}/${SCEN}_none_${COND}.json" ]; then
+    if [ "${REDO}" = "1" ] || [ ! -f "${RES}/${SCEN}_none_${COND}.json" ]; then
         echo "=== control: ${COND} ==="
         python -m avoidance.eval.run_case --capture "${CAP_ABS}" --model none \
             --condition "${COND}" --out "${RES}"
@@ -64,7 +65,7 @@ for M in snn ann; do
     CLEAN="${REPO}/results/carla_eval/pred/${M}"
     ATTACK_ROOT="${REPO}/results/attack/${M}"
 
-    if [ -d "${CLEAN}" ] && [ ! -f "${RES}/${SCEN}_${NAME}_clean.json" ]; then
+    if [ -d "${CLEAN}" ] && { [ "${REDO}" = "1" ] || [ ! -f "${RES}/${SCEN}_${NAME}_clean.json" ]; }; then
         echo "=== clean anchor: ${NAME} ==="
         python -m avoidance.eval.run_case --capture "${CAP_ABS}" --model "${NAME}" \
             --condition clean --pred "${CLEAN}" --capture-id "${CAPTURE_ID}" --out "${RES}"
