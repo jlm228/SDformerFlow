@@ -6,9 +6,8 @@
 #       bash hpc/submit_all_captures.sh ../CARLA-hpc-scripts/captures/135_scenarios
 #   LIMIT=5 DRY_RUN=1 bash hpc/submit_all_captures.sh <captures_dir>    # see what it would do
 #
-# submit_attack_sweep.sh handles ONE capture and CLEARS its output dirs on the way in, so calling
-# it in a loop directly would leave only the last capture's cells. This clears once, then passes
-# KEEP_PREVIOUS=1 to every call.
+# submit_attack_sweep.sh handles ONE capture. With CLEAR_PREVIOUS=1 this clears the output dirs
+# once, before the loop, and never per capture; by default nothing is cleared.
 #
 # ONE SWEEP COVERS BOTH MODELS: SDformerFlow (snn) and STTFlowNet-en4 (ann) share this repo's venv
 # and its voxel tensors, so the per-capture submission already carries both and only the clean
@@ -77,11 +76,11 @@ echo "attack     ${ATTACK}"
 [ "${OPTIMISER}" = "sda" ] && echo "targets    ${TAU_DIR} (sign ${TAU_SIGN})"
 echo
 
-# Clear ONCE, before the loop, for the same reason submit_attack_sweep.sh clears: a previous
-# sweep with a different ramp leaves cells behind that everything downstream would score too.
-if [ "${KEEP_PREVIOUS:-0}" = "0" ] && [ "${DRY_RUN}" = "0" ]; then
+# Cleared ONCE, before the loop, and only on request: a previous sweep with a different ramp
+# leaves cells behind that everything downstream would score too.
+if [ "${CLEAR_PREVIOUS:-0}" = "1" ] && [ "${DRY_RUN}" = "0" ]; then
   for MODEL in ${MODELS}; do
-    echo "clearing results/attack/${MODEL} (KEEP_PREVIOUS=1 to append)"
+    echo "clearing results/attack/${MODEL} (CLEAR_PREVIOUS=1)"
     rm -rf "results/attack/${MODEL}"
     mkdir -p "results/attack/${MODEL}"
   done
@@ -134,7 +133,7 @@ for CAP in "${DIRS[@]}"; do
   fi
 
   echo "=== ${ID}${LEVELS:+ (tau ${LEVELS})} ===" | tee -a "${LOG}"
-  KEEP_PREVIOUS=1 ATTACK="${ATTACK}" \
+  CLEAR_PREVIOUS=0 ATTACK="${ATTACK}" \
     bash hpc/submit_attack_sweep.sh "${CAP}" 2>&1 | tee -a "${LOG}"
   SUBMITTED=$((SUBMITTED + 1))
 
