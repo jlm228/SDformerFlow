@@ -6,7 +6,7 @@
 # Chained behind the attack array by submit_attack_sweep.sh. CPU only -- scoring is seconds per
 # case, so this must not sit in the GPU queue.
 #
-# The avoidance package is model-free (numpy/pandas/cv2, no torch), so it scores this repo's two
+# The av_model package is model-free (numpy/pandas/cv2, no torch), so it scores this repo's two
 # models and OF_EV_SNN's one through a single implementation, out of the CARLA-hpc-scripts
 # checkout. Results land in the same directory OF_EV_SNN's scoring job writes to, so the grid
 # figure spans all three.
@@ -53,7 +53,7 @@ mkdir -p "${RES}/reports"
 for COND in no_action gt_oracle; do
     if [ "${REDO}" = "1" ] || [ ! -f "${RES}/${SCEN}_none_${COND}.json" ]; then
         echo "=== control: ${COND} ==="
-        python -m avoidance.eval.run_case --capture "${CAP_ABS}" --model none \
+        python -m av_model.eval.run_case --capture "${CAP_ABS}" --model none \
             --condition "${COND}" --out "${RES}"
     fi
 done
@@ -67,7 +67,7 @@ for M in snn ann; do
 
     if [ -d "${CLEAN}" ] && { [ "${REDO}" = "1" ] || [ ! -f "${RES}/${SCEN}_${NAME}_clean.json" ]; }; then
         echo "=== clean anchor: ${NAME} ==="
-        python -m avoidance.eval.run_case --capture "${CAP_ABS}" --model "${NAME}" \
+        python -m av_model.eval.run_case --capture "${CAP_ABS}" --model "${NAME}" \
             --condition clean --pred "${CLEAN}" --capture-id "${CAPTURE_ID}" --out "${RES}"
     fi
 
@@ -88,7 +88,7 @@ for M in snn ann; do
         fi
         CASE="${NAME}__${OBJECTIVE}__eps${EPS}"
         echo "  ${CASE}"
-        python -m avoidance.eval.run_case --capture "${CAP_ABS}" --model "${CASE}" \
+        python -m av_model.eval.run_case --capture "${CAP_ABS}" --model "${CASE}" \
             --condition clean --pred "${EPS_DIR}" --capture-id "${CAPTURE_ID}" --out "${RES}"
     done
 
@@ -99,4 +99,4 @@ for M in snn ann; do
 done
 
 echo
-bash avoidance/viz/make_figures.sh "${RES}" "${CAP_ABS}" "${REPO}/results/attack"
+bash av_model/viz/make_figures.sh "${RES}" "${CAP_ABS}" "${REPO}/results/attack"

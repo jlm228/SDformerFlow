@@ -151,7 +151,7 @@ def preflight_input(capture_dir, model, window):
     It deliberately does NOT go through `input_from_events`, which splits one span at its
     midpoint and so assumes consecutive windows are adjacent.
     """
-    from groundtruth.inspect_capture import load_capture
+    from capture.groundtruth.inspect_capture import load_capture
     from carla_eval.carla_to_voxel import events_to_voxel
 
     events, windows, meta = load_capture(capture_dir, mmap=True)
@@ -354,7 +354,7 @@ def main():
             lo, hi = max(config['data']['num_chunks'] - 1, 0), 0
         else:
             raise SystemExit(
-                "no band at %s. Compute it once, in an environment with avoidance's "
+                "no band at %s. Compute it once, in an environment with av_model's "
                 "dependencies:\n  python -m attack_core.band --capture %s"
                 % (path, args.capture))
 

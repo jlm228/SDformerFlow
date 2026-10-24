@@ -38,7 +38,7 @@ ANN_RUNID="${ANN_RUNID:-$(cat hpc/logs/ann_runid.txt 2>/dev/null || true)}"
 
 [ -f "${CAPTURE}/attack_band.json" ] || {
   echo "ERROR: no ${CAPTURE}/attack_band.json."
-  echo "       Compute it once, in an environment with avoidance's dependencies:"
+  echo "       Compute it once, in an environment with av_model's dependencies:"
   echo "         cd ${CARLA_SCRIPTS_ROOT} && python -m attack_core.band --capture ${CAPTURE}"
   exit 1; }
 
