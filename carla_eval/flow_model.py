@@ -17,7 +17,8 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from spikingjelly.activation_based import functional, neuron  # noqa: E402
+from spikingjelly.activation_based import functional, layer as sj_layer, neuron  # noqa: E402
+from timm.models.layers import DropPath  # noqa: E402
 
 from models.STSwinNet.STSwinNet import STTFlowNet, STTFlowNet_4en  # noqa: E402
 from models.STSwinNet_SNN.Spiking_STSwinNet import (  # noqa: E402
@@ -94,6 +95,12 @@ class SwinFlowAdapter:
         # own statistics rather than by running estimates.
         if self.spiking and config["loader"]["batch_size"] == 1:
             model.train()
+            # train() also switches on the swin blocks' stochastic depth (drop_path_rate 0.2)
+            # and dropout, which drop branches at random. Inference keeps every branch, so
+            # those layers stay in eval() and the prediction is deterministic.
+            for m in model.modules():
+                if isinstance(m, (DropPath, torch.nn.Dropout, sj_layer.Dropout)):
+                    m.eval()
         else:
             model.eval()
 
