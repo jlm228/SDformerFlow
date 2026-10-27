@@ -78,8 +78,11 @@ def events_to_voxel(x, y, t, pol, num_bins, height, width):
 
 
 def convert(capture_dir, out_dir, capture_id=None, num_bins=10, flow_y_flip=True,
-            gt_offset=1, depth_max=500.0, carla_scripts=None):
+            gt_offset=1, depth_max=500.0, carla_scripts=None, only_windows=None):
+    """Write the capture in the layout above. only_windows, if given, limits the output to
+    those 0-based window indices."""
     ic = _import_inspect_capture(carla_scripts)
+    keep = None if only_windows is None else set(only_windows)
 
     events, windows, meta = ic.load_capture(capture_dir)
     capture_id = capture_id or os.path.basename(os.path.normpath(capture_dir))
@@ -105,6 +108,8 @@ def convert(capture_dir, out_dir, capture_id=None, num_bins=10, flow_y_flip=True
 
     written, empty = [], 0
     for i in range(len(windows)):
+        if keep is not None and i not in keep:
+            continue
         t_start = t_starts[i]
         if t_start != t_start:  # NaN: window recorded zero events
             continue
