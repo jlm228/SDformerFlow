@@ -100,7 +100,9 @@ def convert(capture_dir, out_dir, capture_id=None, num_bins=10, flow_y_flip=True
 
     # searchsorted rather than a boolean mask per window, which would be a full pass over tens
     # of millions of events each time. It needs sorted input, so sort if the array is not.
-    t_all = events["t"]
+    # A contiguous copy: on the structured array's strided "t" field, searchsorted would copy the
+    # whole column on every call.
+    t_all = np.ascontiguousarray(events["t"])
     if len(t_all) > 1 and not np.all(np.diff(t_all) >= 0):
         order = np.argsort(t_all, kind="stable")
         events, t_all = events[order], t_all[order]
